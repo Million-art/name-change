@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: name-change-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: RENDER_HEALTH_CHECK
+        value: "true"
+    
+    autoDeploy: true
+    plan: free
+    # Prevent service from sleeping
+    numInstances: 1
+    # Configure health check
+    healthCheckTimeout: 10
+    healthCheckInterval: 30
+    # Keep the service alive
+    envVars:
+      - key: KEEP_ALIVE
+        value: "true" 
