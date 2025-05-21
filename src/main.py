@@ -669,15 +669,6 @@ class NameChangeBot:
             await self.start_web_server()
 
             # Add name change handlers
-            @self.client.on(events.UserUpdate)
-            async def handle_user_update(event):
-                """Handle user updates including name changes"""
-                try:
-                    logger.info(f"Received user update event: {event}")
-                    await self.handle_name_change(event)
-                except Exception as e:
-                    logger.error(f"Error in user update handler: {str(e)}", exc_info=True)
-
             @self.client.on(events.Raw)
             async def handle_raw(event):
                 """Handle raw events for name changes"""
@@ -695,7 +686,14 @@ class NameChangeBot:
                     # Handle UpdateUserName
                     if isinstance(event, UpdateUserName):
                         logger.info(f"Processing UpdateUserName event for user {event.user_id}")
-                        await self.handle_name_change(event)
+                        try:
+                            user = await self.client.get_entity(event.user_id)
+                            if isinstance(user, User):
+                                logger.info(f"User details: {user}")
+                                update_event = UpdateUser(user=user)
+                                await self.handle_name_change(update_event)
+                        except Exception as e:
+                            logger.error(f"Error processing UpdateUserName: {str(e)}")
                         return
 
                 except Exception as e:
