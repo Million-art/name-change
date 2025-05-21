@@ -148,7 +148,6 @@ class Database:
                     )
                 ''')
                 
-                # Create name_changes table to track history
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS name_changes (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
