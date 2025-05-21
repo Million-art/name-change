@@ -192,12 +192,35 @@ async def check_name_changes(user: User):
             logger.info(f"Registered new user {user.id} in database")
             return
 
-        # Update the database with new data
-        db.update_user(
-            user_id=user.id,
-            first_name=current_data['first_name'],
-            last_name=current_data['last_name']
-        )
+        changes = []
+
+        # Check first name
+        if db_user['first_name'] != current_data['first_name']:
+            changes.append(f"👤 First name: {db_user['first_name']} -> {current_data['first_name']}")
+
+        # Check last name
+        if db_user['last_name'] != current_data['last_name']:
+            changes.append(f"👤 Last name: {db_user['last_name']} -> {current_data['last_name']}")
+
+        # Only update database if changes were detected
+        if changes:
+            # Update database with new data
+            db.register_user(
+                user_id=user.id,
+                first_name=user.first_name,
+                last_name=user.last_name or ""
+            )
+            
+            # Get user's active groups for context
+            group_names = [g['group_name'] for g in active_groups]
+
+            message = (
+                f"👤 User ID: `{user.id}`\n"
+                f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n\n"    
+                + "\n".join(changes)
+            )
+            await send_to_admin(message)
+            logger.info(f"Sent name change notification for user {user.id}")
 
         # Check if the user's name matches any scam names
         scam_names = db.get_scam_names()
