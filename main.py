@@ -272,7 +272,7 @@ async def check_name_changes(user: User):
             scam_message = (
                 "⚠️ Scam Alert - User Banned!\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 User: {user.first_name} {user.last_name or ''}\n"
+                f"👤 Name changed to: {user.first_name} {user.last_name or ''}\n"
                 f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n"
              )
             await send_to_admin(scam_message)
