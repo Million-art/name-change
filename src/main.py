@@ -674,10 +674,12 @@ class NameChangeBot:
                 """Handle raw events for name changes"""
                 try:
                     logger.info(f"Received raw event: {type(event)}")
+                    logger.info(f"Event details: {event}")
                     
                     # Handle UpdateUser
                     if isinstance(event, UpdateUser):
                         logger.info(f"Processing UpdateUser event for user {event.user.id}")
+                        logger.info(f"User details: {event.user}")
                         await self.handle_name_change(event)
                         return
                     
@@ -687,18 +689,51 @@ class NameChangeBot:
                         await self.handle_name_change(event)
                         return
                     
-                    # Handle UpdateChannelParticipant (for group member updates)
+                    # Handle UpdateChannelParticipant
                     if isinstance(event, UpdateChannelParticipant):
                         logger.info(f"Processing UpdateChannelParticipant event: {event}")
                         try:
                             user = await self.client.get_entity(event.user_id)
                             if isinstance(user, User):
                                 logger.info(f"User {user.id} updated in channel: {event.channel_id}")
+                                logger.info(f"User details: {user}")
                                 # Create a synthetic UpdateUser event
                                 update_event = UpdateUser(user=user)
                                 await self.handle_name_change(update_event)
                         except Exception as e:
                             logger.error(f"Error processing UpdateChannelParticipant: {str(e)}")
+                        return
+
+                    # Handle UpdateChatParticipant
+                    if hasattr(event, 'participant') and hasattr(event, 'chat_id'):
+                        logger.info(f"Processing UpdateChatParticipant event: {event}")
+                        try:
+                            user = await self.client.get_entity(event.participant.user_id)
+                            if isinstance(user, User):
+                                logger.info(f"User {user.id} updated in chat: {event.chat_id}")
+                                logger.info(f"User details: {user}")
+                                # Create a synthetic UpdateUser event
+                                update_event = UpdateUser(user=user)
+                                await self.handle_name_change(update_event)
+                        except Exception as e:
+                            logger.error(f"Error processing UpdateChatParticipant: {str(e)}")
+                        return
+
+                    # Handle UpdateChatParticipants
+                    if hasattr(event, 'participants'):
+                        logger.info(f"Processing UpdateChatParticipants event: {event}")
+                        try:
+                            for participant in event.participants:
+                                if hasattr(participant, 'user_id'):
+                                    user = await self.client.get_entity(participant.user_id)
+                                    if isinstance(user, User):
+                                        logger.info(f"User {user.id} updated in chat participants")
+                                        logger.info(f"User details: {user}")
+                                        # Create a synthetic UpdateUser event
+                                        update_event = UpdateUser(user=user)
+                                        await self.handle_name_change(update_event)
+                        except Exception as e:
+                            logger.error(f"Error processing UpdateChatParticipants: {str(e)}")
                         return
 
                 except Exception as e:
