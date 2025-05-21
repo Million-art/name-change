@@ -110,12 +110,42 @@ async def start_health_check_server():
 
 # Memory optimization function
 def optimize_memory():
+    """Optimize memory usage"""
     gc.collect()
     if hasattr(gc, 'collect_generations'):
         gc.collect_generations()
+    
+    # Clear any cached data
+    if hasattr(client, '_cache'):
+        client._cache.clear()
+    
+    # Force garbage collection of unused objects
+    gc.set_threshold(100, 5, 5)  # More aggressive garbage collection
+
+async def cleanup_old_data():
+    """Clean up old data periodically"""
+    while True:
+        try:
+            # Clean up old name changes (keep last 30 days)
+            db.cleanup_old_name_changes(days=30)
+            
+            # Clean up inactive users (not seen in 90 days)
+            db.cleanup_inactive_users(days=90)
+            
+            # Optimize memory
+            optimize_memory()
+            
+            # Wait for 24 hours before next cleanup
+            await asyncio.sleep(24 * 60 * 60)
+        except Exception as e:
+            logger.error(f"Error in cleanup task: {str(e)}")
+            await asyncio.sleep(3600)  # Wait 1 hour before retrying
 
 async def periodic_scan():
     """Periodically scan all monitored groups for name changes"""
+    BATCH_SIZE = 100  # Process users in batches of 100
+    RATE_LIMIT_DELAY = 1  # 1 second delay between batches
+    
     while True:
         try:
             logger.info("Starting periodic scan of monitored groups")
@@ -123,20 +153,39 @@ async def periodic_scan():
                 try:
                     # Get all participants at once to reduce API calls
                     participants = await client.get_participants(group_id)
-                    for user in participants:
-                        if isinstance(user, User):
+                    total_participants = len(participants)
+                    logger.info(f"Processing {total_participants} users in group {group_id}")
+                    
+                    # Process users in batches
+                    for i in range(0, total_participants, BATCH_SIZE):
+                        batch = participants[i:i + BATCH_SIZE]
+                        tasks = []
+                        
+                        for user in batch:
+                            if isinstance(user, User):
+                                tasks.append(check_name_changes(user))
+                        
+                        # Process batch concurrently
+                        if tasks:
                             try:
-                                await check_name_changes(user)
+                                await asyncio.gather(*tasks, return_exceptions=True)
                             except FloodWaitError as e:
                                 logger.warning(f"Flood wait required: {e.seconds} seconds")
                                 await asyncio.sleep(e.seconds)
-                                continue
                             except Exception as e:
-                                logger.error(f"Error checking user {user.id}: {str(e)}")
-                                continue
+                                logger.error(f"Error processing batch: {str(e)}")
+                        
+                        # Rate limiting between batches
+                        await asyncio.sleep(RATE_LIMIT_DELAY)
+                        
+                        # Log progress
+                        progress = min(i + BATCH_SIZE, total_participants)
+                        logger.info(f"Processed {progress}/{total_participants} users in group {group_id}")
+                        
                 except Exception as e:
                     logger.error(f"Error scanning group {group_id}: {str(e)}")
                     continue
+                    
         except Exception as e:
             logger.error(f"Error in periodic scan: {str(e)}")
         
@@ -746,6 +795,9 @@ async def main():
         
         # Start ping mechanism
         asyncio.create_task(send_ping())
+        
+        # Start cleanup task
+        asyncio.create_task(cleanup_old_data())
         
         # Ensure we're receiving updates
         me = await client.get_me()
