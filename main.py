@@ -273,48 +273,77 @@ async def check_name_changes(user: User):
                         continue
                     
                     # Ban the user
-                    await client(functions.channels.EditBannedRequest(
-                        channel=group_entity,
-                        participant=user,
-                        banned_rights=types.ChatBannedRights(
-                            until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
-                            view_messages=True,
-                            send_messages=True,
-                            send_media=True,
-                            send_stickers=True,
-                            send_gifs=True,
-                            send_games=True,
-                            send_inline=True,
-                            embed_links=True
-                        )
-                    ))
-                    
-                    # Verify ban by checking participant status
                     try:
-                        # Get full participant info
-                        participant = await client(functions.channels.GetParticipantRequest(
-                            channel=group_entity,
-                            participant=user
-                        ))
-                        
-                        # Check if user is banned
-                        if hasattr(participant.participant, 'banned_rights'):
-                            ban_results.append(f"✅ {group['group_name']}: Successfully banned")
-                            logger.info(f"Successfully banned user {user.id} from group {group['group_name']}")
+                        # Check if it's a supergroup/channel
+                        if isinstance(group_entity, (types.Channel, types.Chat)):
+                            if isinstance(group_entity, types.Channel):
+                                # For supergroups/channels
+                                await client(functions.channels.EditBannedRequest(
+                                    channel=group_entity,
+                                    participant=user,
+                                    banned_rights=types.ChatBannedRights(
+                                        until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
+                                        view_messages=True,
+                                        send_messages=True,
+                                        send_media=True,
+                                        send_stickers=True,
+                                        send_gifs=True,
+                                        send_games=True,
+                                        send_inline=True,
+                                        embed_links=True
+                                    )
+                                ))
+                            else:
+                                # For regular groups
+                                await client(functions.messages.DeleteChatUserRequest(
+                                    chat_id=group_entity.id,
+                                    user_id=user
+                                ))
+                            
+                            # Verify ban by checking participant status
+                            try:
+                                # Get full participant info
+                                if isinstance(group_entity, types.Channel):
+                                    participant = await client(functions.channels.GetParticipantRequest(
+                                        channel=group_entity,
+                                        participant=user
+                                    ))
+                                    # Check if user is banned
+                                    if hasattr(participant.participant, 'banned_rights'):
+                                        ban_results.append(f"✅ {group['group_name']}: Successfully banned")
+                                        logger.info(f"Successfully banned user {user.id} from group {group['group_name']}")
+                                    else:
+                                        ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User not properly banned")
+                                        logger.error(f"Ban verification failed for user {user.id} in group {group['group_name']} - User not properly banned")
+                                else:
+                                    # For regular groups, try to get chat member
+                                    try:
+                                        await client.get_permissions(group_entity, user)
+                                        ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User still in group")
+                                    except Exception as e:
+                                        if "User not found" in str(e) or "User is not a participant" in str(e):
+                                            ban_results.append(f"✅ {group['group_name']}: Successfully banned")
+                                            logger.info(f"Successfully banned user {user.id} from group {group['group_name']}")
+                                        else:
+                                            ban_results.append(f"❌ {group['group_name']}: Ban verification error - {str(e)}")
+                                            logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
+                            except Exception as e:
+                                # If we can't get participant info, they might be banned
+                                if "User is banned" in str(e) or "CHANNEL_PRIVATE" in str(e) or "User not found" in str(e):
+                                    ban_results.append(f"✅ {group['group_name']}: Successfully banned (confirmed by error)")
+                                    logger.info(f"Successfully banned user {user.id} from group {group['group_name']} (confirmed by error)")
+                                else:
+                                    ban_results.append(f"❌ {group['group_name']}: Ban verification error - {str(e)}")
+                                    logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
                         else:
-                            ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User not properly banned")
-                            logger.error(f"Ban verification failed for user {user.id} in group {group['group_name']} - User not properly banned")
+                            ban_results.append(f"❌ {group['group_name']}: Unsupported group type")
+                            logger.error(f"Unsupported group type for group {group['group_name']}")
                     except Exception as e:
-                        # If we can't get participant info, they might be banned
-                        if "User is banned" in str(e) or "CHANNEL_PRIVATE" in str(e):
-                            ban_results.append(f"✅ {group['group_name']}: Successfully banned (confirmed by error)")
-                            logger.info(f"Successfully banned user {user.id} from group {group['group_name']} (confirmed by error)")
-                        else:
-                            ban_results.append(f"❌ {group['group_name']}: Ban verification error - {str(e)}")
-                            logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
+                        ban_results.append(f"❌ {group['group_name']}: {str(e)}")
+                        logger.error(f"Error banning user {user.id} from group {group['group_name']}: {str(e)}")
                 except Exception as e:
                     ban_results.append(f"❌ {group['group_name']}: {str(e)}")
-                    logger.error(f"Error banning user {user.id} from group {group['group_name']}: {str(e)}")
+                    logger.error(f"Error processing group {group['group_name']}: {str(e)}")
             
             # Send notification with results
             ban_report = "\n".join(ban_results)
