@@ -274,36 +274,53 @@ async def check_name_changes(user: User):
                     
                     # Ban the user
                     try:
+                        # Log group type and details
+                        logger.info(f"Processing ban for group {group['group_name']} (ID: {group['group_id']})")
+                        logger.info(f"Group entity type: {type(group_entity).__name__}")
+                        
                         # Check if it's a supergroup/channel
                         if isinstance(group_entity, (types.Channel, types.Chat)):
                             if isinstance(group_entity, types.Channel):
+                                logger.info(f"Using channel ban method for {group['group_name']}")
                                 # For supergroups/channels
-                                await client(functions.channels.EditBannedRequest(
-                                    channel=group_entity,
-                                    participant=user,
-                                    banned_rights=types.ChatBannedRights(
-                                        until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
-                                        view_messages=True,
-                                        send_messages=True,
-                                        send_media=True,
-                                        send_stickers=True,
-                                        send_gifs=True,
-                                        send_games=True,
-                                        send_inline=True,
-                                        embed_links=True
-                                    )
-                                ))
+                                try:
+                                    await client(functions.channels.EditBannedRequest(
+                                        channel=group_entity,
+                                        participant=user,
+                                        banned_rights=types.ChatBannedRights(
+                                            until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
+                                            view_messages=True,
+                                            send_messages=True,
+                                            send_media=True,
+                                            send_stickers=True,
+                                            send_gifs=True,
+                                            send_games=True,
+                                            send_inline=True,
+                                            embed_links=True
+                                        )
+                                    ))
+                                    logger.info(f"Channel ban request sent for {group['group_name']}")
+                                except Exception as e:
+                                    logger.error(f"Channel ban error details: {str(e)}")
+                                    raise
                             else:
+                                logger.info(f"Using regular group ban method for {group['group_name']}")
                                 # For regular groups
-                                await client(functions.messages.DeleteChatUserRequest(
-                                    chat_id=group_entity.id,
-                                    user_id=user
-                                ))
+                                try:
+                                    await client(functions.messages.DeleteChatUserRequest(
+                                        chat_id=group_entity.id,
+                                        user_id=user
+                                    ))
+                                    logger.info(f"Regular group ban request sent for {group['group_name']}")
+                                except Exception as e:
+                                    logger.error(f"Regular group ban error details: {str(e)}")
+                                    raise
                             
                             # Verify ban by checking participant status
                             try:
                                 # Get full participant info
                                 if isinstance(group_entity, types.Channel):
+                                    logger.info(f"Verifying channel ban for {group['group_name']}")
                                     participant = await client(functions.channels.GetParticipantRequest(
                                         channel=group_entity,
                                         participant=user
@@ -316,10 +333,12 @@ async def check_name_changes(user: User):
                                         ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User not properly banned")
                                         logger.error(f"Ban verification failed for user {user.id} in group {group['group_name']} - User not properly banned")
                                 else:
+                                    logger.info(f"Verifying regular group ban for {group['group_name']}")
                                     # For regular groups, try to get chat member
                                     try:
                                         await client.get_permissions(group_entity, user)
                                         ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User still in group")
+                                        logger.error(f"User {user.id} still has permissions in group {group['group_name']}")
                                     except Exception as e:
                                         if "User not found" in str(e) or "User is not a participant" in str(e):
                                             ban_results.append(f"✅ {group['group_name']}: Successfully banned")
@@ -337,10 +356,11 @@ async def check_name_changes(user: User):
                                     logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
                         else:
                             ban_results.append(f"❌ {group['group_name']}: Unsupported group type")
-                            logger.error(f"Unsupported group type for group {group['group_name']}")
+                            logger.error(f"Unsupported group type for group {group['group_name']}: {type(group_entity).__name__}")
                     except Exception as e:
                         ban_results.append(f"❌ {group['group_name']}: {str(e)}")
                         logger.error(f"Error banning user {user.id} from group {group['group_name']}: {str(e)}")
+                        logger.error(f"Full error details: {str(e)}", exc_info=True)
                 except Exception as e:
                     ban_results.append(f"❌ {group['group_name']}: {str(e)}")
                     logger.error(f"Error processing group {group['group_name']}: {str(e)}")
