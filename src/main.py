@@ -623,10 +623,16 @@ class NameChangeBot:
             logger.info(f"Bot started as @{me.username}")
 
             # Add name change handlers for all update types
-            self.client.add_event_handler(
-                self.handle_name_change,
-                events.Raw(types=[UpdateUser, UpdateUserName])
-            )
+            @self.client.on(events.Raw)
+            async def handle_raw(event):
+                """Handle raw events for name changes"""
+                try:
+                    logger.info(f"Received raw event: {type(event)}")
+                    if isinstance(event, (UpdateUser, UpdateUserName)):
+                        logger.info(f"Processing name change event: {type(event)}")
+                        await self.handle_name_change(event)
+                except Exception as e:
+                    logger.error(f"Error in raw event handler: {str(e)}", exc_info=True)
 
             # Add command handlers
             self.client.add_event_handler(self.start_command, events.NewMessage(pattern='/start'))
