@@ -8,7 +8,7 @@ from telethon.tl.types import User, PeerChannel, UpdateUserName, UpdateUser, Upd
 from telethon.errors import FloodWaitError
 from dotenv import load_dotenv
 from database import Database
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiohttp import web, ClientSession
 import gc
 
@@ -162,10 +162,7 @@ async def check_name_changes(user: User):
     """Check for and report name changes"""
     try:
         if not user:
-            logger.warning("Received null user in check_name_changes")
             return
-
-        logger.info(f"Checking name changes for user {user.id} ({user.first_name} {user.last_name or ''})")
 
         # First check if user is in any active monitored groups
         active_groups = db.get_user_active_groups(user.id)
@@ -182,12 +179,11 @@ async def check_name_changes(user: User):
         db_user = db.get_user(user.id)
         
         # Log the data for debugging
-        logger.info(f"Current user data: {current_data}")
-        logger.info(f"Database user data: {db_user}")
+        logger.debug(f"DB user data: {db_user}")
+        logger.debug(f"Current user data: {current_data}")
 
         # If user doesn't exist in database, register them
         if not db_user:
-            logger.info(f"Registering new user {user.id} in database")
             db.register_user(
                 user_id=user.id,
                 first_name=user.first_name,
@@ -196,125 +192,32 @@ async def check_name_changes(user: User):
             logger.info(f"Registered new user {user.id} in database")
             return
 
-        # Check for name changes
-        name_changed = False
-        if db_user['first_name'] != current_data['first_name']:
-            logger.info(f"First name change detected for user {user.id}: {db_user['first_name']} -> {current_data['first_name']}")
-            name_changed = True
-        if db_user['last_name'] != current_data['last_name']:
-            logger.info(f"Last name change detected for user {user.id}: {db_user['last_name']} -> {current_data['last_name']}")
-            name_changed = True
+        # Update the database with new data
+        db.update_user(
+            user_id=user.id,
+            first_name=current_data['first_name'],
+            last_name=current_data['last_name']
+        )
 
-        if name_changed:
-            logger.info(f"Name change detected for user {user.id}")
-            # Update the database with new data
-            db.update_user(
-                user_id=user.id,
-                first_name=current_data['first_name'],
-                last_name=current_data['last_name']
-            )
-            logger.info(f"Updated user {user.id} in database with new name")
-
-            # Check if the user's name matches any scam names
-            scam_names = db.get_scam_names()
-            full_name = f"{current_data['first_name']} {current_data['last_name']}".strip().lower()
-            logger.info(f"Checking scam names against: {full_name}")
-            logger.info(f"Available scam names: {scam_names}")
+        # Check if the user's name matches any scam names
+        scam_names = db.get_scam_names()
+        full_name = f"{current_data['first_name']} {current_data['last_name']}".strip().lower()
+        
+        if any(scam_name.lower() in full_name for scam_name in scam_names):
+            # Get user's active groups for context
+            group_names = [g['group_name'] for g in active_groups]
             
-            if any(scam_name.lower() in full_name for scam_name in scam_names):
-                logger.info(f"Scam name match detected for user {user.id}")
-                # Get user's active groups for context
-                group_names = [g['group_name'] for g in active_groups]
-                ban_results = []
-                
-                for group in active_groups:
-                    try:
-                        group_entity = await client.get_entity(group['group_id'])
-                        
-                        # Check if bot has admin rights
-                        bot_participant = await client.get_permissions(group_entity, await client.get_me())
-                        logger.info(f"Bot permissions in {group['group_name']}: Admin={bot_participant.is_admin}, Ban={bot_participant.ban_users}")
-                        
-                        if not bot_participant.is_admin:
-                            ban_results.append(f"❌ {group['group_name']}: Bot is not admin")
-                            logger.error(f"Bot is not admin in group {group['group_name']}")
-                            continue
-                        
-                        # Check if bot has ban rights
-                        if not bot_participant.ban_users:
-                            ban_results.append(f"❌ {group['group_name']}: Bot lacks ban rights")
-                            logger.error(f"Bot lacks ban rights in group {group['group_name']}")
-                            continue
-                        
-                        # Log ban attempt
-                        logger.info(f"Attempting to ban user {user.id} from group {group['group_name']}")
-                        
-                        # Ban the user
-                        try:
-                            await client(functions.channels.EditBannedRequest(
-                                channel=group_entity,
-                                participant=user,
-                                banned_rights=types.ChatBannedRights(
-                                    until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
-                                    view_messages=True,
-                                    send_messages=True,
-                                    send_media=True,
-                                    send_stickers=True,
-                                    send_gifs=True,
-                                    send_games=True,
-                                    send_inline=True,
-                                    embed_links=True
-                                )
-                            ))
-                            logger.info(f"Ban request sent for user {user.id} in group {group['group_name']}")
-                        except Exception as e:
-                            logger.error(f"Error sending ban request: {str(e)}")
-                            ban_results.append(f"❌ {group['group_name']}: Ban request failed - {str(e)}")
-                            continue
-                        
-                        # Verify ban by checking participant status
-                        try:
-                            # Get full participant info
-                            participant = await client(functions.channels.GetParticipantRequest(
-                                channel=group_entity,
-                                participant=user
-                            ))
-                            logger.info(f"Got participant info for user {user.id} in group {group['group_name']}")
-                            
-                            # Check if user is banned
-                            if hasattr(participant.participant, 'banned_rights'):
-                                ban_results.append(f"✅ {group['group_name']}: Successfully banned")
-                                logger.info(f"Successfully banned user {user.id} from group {group['group_name']}")
-                            else:
-                                ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User not properly banned")
-                                logger.error(f"Ban verification failed for user {user.id} in group {group['group_name']} - User not properly banned")
-                        except Exception as e:
-                            # If we can't get participant info, they might be banned
-                            if "User is banned" in str(e) or "CHANNEL_PRIVATE" in str(e):
-                                ban_results.append(f"✅ {group['group_name']}: Successfully banned (confirmed by error)")
-                                logger.info(f"Successfully banned user {user.id} from group {group['group_name']} (confirmed by error)")
-                            else:
-                                ban_results.append(f"❌ {group['group_name']}: Ban verification error - {str(e)}")
-                                logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
-                    except Exception as e:
-                        ban_results.append(f"❌ {group['group_name']}: {str(e)}")
-                        logger.error(f"Error banning user {user.id} from group {group['group_name']}: {str(e)}")
-                
-                # Send notification with results
-                ban_report = "\n".join(ban_results)
-                scam_message = (
-                    "⚠️ Scam Alert - User Banned!\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 Name changed to: {user.first_name} {user.last_name or ''}\n"
-                    f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n"
-                    f"🔨 Action: Ban attempt results:\n{ban_report}\n"
-                    f"📝 Reason: Name matches known scam pattern"
-                )
-                await send_to_admin(scam_message)
-                logger.info(f"Sent scam alert and ban report for user {user.id}")
+            scam_message = (
+                "⚠️ Potential Scam Alert!\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 User: {user.first_name} {user.last_name or ''}\n"
+                f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n"
+             )
+            await send_to_admin(scam_message)
+            logger.info(f"Sent scam alert for user {user.id}")
 
     except Exception as e:
-        logger.error(f"Error checking name changes for user {user.id}: {str(e)}", exc_info=True)
+        logger.error(f"Error checking name changes for user {user.id}: {str(e)}")
 
 async def notify_user_left(user_id: int, group_id: int, group_name: str):
     """Notify admin when a user leaves a group"""
