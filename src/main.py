@@ -4,6 +4,8 @@ from telethon import TelegramClient, events
 from telethon.tl.types import User, UpdateUser, UpdateUserName, PeerChannel, UpdateChannelParticipant
 from src.config.config import Config
 from src.database import Database
+import os
+from aiohttp import web
 
 # Set up logging
 logging.basicConfig(
@@ -24,6 +26,22 @@ class NameChangeBot:
         
         # Initialize database
         self.db = Database()
+        
+        # Initialize web app for Render
+        self.app = web.Application()
+        self.app.router.add_get('/', self.handle_web_request)
+
+    async def handle_web_request(self, request):
+        """Handle web requests for Render"""
+        return web.Response(text="Bot is running!")
+
+    async def start_web_server(self):
+        """Start the web server for Render"""
+        runner = web.AppRunner(self.app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
+        await site.start()
+        logger.info(f"Web server started on port {os.getenv('PORT', 8080)}")
 
     async def handle_name_change(self, event):
         """Handle user name changes"""
@@ -646,6 +664,9 @@ class NameChangeBot:
             # Get bot info
             me = await self.client.get_me()
             logger.info(f"Bot started as @{me.username}")
+
+            # Start web server for Render
+            await self.start_web_server()
 
             # Add name change handlers for all update types
             @self.client.on(events.Raw)
