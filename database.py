@@ -282,20 +282,11 @@ class Database:
             return None
 
     def get_all_users(self):
-        """Get all active users from database with pagination"""
+        """Get all users from database"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT u.*, 
-                           COUNT(DISTINCT ug.group_id) as group_count,
-                           MAX(ug.last_seen) as last_seen
-                    FROM users u
-                    LEFT JOIN user_groups ug ON u.user_id = ug.user_id
-                    WHERE u.is_active = 1
-                    GROUP BY u.user_id
-                    ORDER BY last_seen DESC
-                ''')
+                cursor.execute('SELECT * FROM users WHERE is_active = 1')
                 return [dict(user) for user in cursor.fetchall()]
         except Exception as e:
             logger.error(f"Error getting all users: {str(e)}")
@@ -403,15 +394,17 @@ class Database:
             return False
 
     def get_user_active_groups(self, user_id: int):
-        """Get all active groups for a user"""
+        """Get all active groups a user belongs to"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT g.group_id, g.group_name 
+                    SELECT g.group_id, g.group_name
                     FROM groups g
                     JOIN user_groups ug ON g.group_id = ug.group_id
-                    WHERE ug.user_id = ? AND ug.is_active = 1
+                    WHERE ug.user_id = ? 
+                    AND ug.is_active = 1 
+                    AND g.is_active = 1
                 ''', (user_id,))
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
@@ -424,40 +417,38 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Get current user data
+                # Get existing user data
                 cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-                current_data = cursor.fetchone()
+                existing_user = cursor.fetchone()
                 
-                if current_data:
-                    # Check if name has changed
-                    if (current_data['first_name'] != first_name or 
-                        current_data['last_name'] != last_name):
-                        
-                        # Record name change
+                if existing_user:
+                    # Check for changes
+                    changes = []
+                    if existing_user['first_name'] != first_name:
+                        changes.append(('first_name', existing_user['first_name'], first_name))
+                    if existing_user['last_name'] != last_name:
+                        changes.append(('last_name', existing_user['last_name'], last_name))
+                    if username and existing_user['username'] != username:
+                        changes.append(('username', existing_user['username'], username))
+                    
+                    # Record changes
+                    for change_type, old_value, new_value in changes:
                         cursor.execute('''
                             INSERT INTO name_changes 
                             (user_id, change_type, old_value, new_value, changed_at)
                             VALUES (?, ?, ?, ?, ?)
-                        ''', (
-                            user_id,
-                            'name',
-                            f"{current_data['first_name']} {current_data['last_name']}".strip(),
-                            f"{first_name} {last_name}".strip(),
-                            datetime.now()
-                        ))
+                        ''', (user_id, change_type, old_value, new_value, datetime.now()))
+                        logger.info(f"Recorded {change_type} change for user {user_id}: {old_value} -> {new_value}")
                 
                 # Update user data
                 cursor.execute('''
                     UPDATE users 
-                    SET first_name = ?, 
-                        last_name = ?, 
-                        username = COALESCE(?, username),
-                        last_updated = ?,
-                        last_checked = ?
+                    SET first_name = ?, last_name = ?, username = ?, last_updated = ?, last_checked = ?
                     WHERE user_id = ?
-                ''', (first_name, last_name, username, datetime.now(), datetime.now(), user_id))
+                ''', (first_name, last_name, username or "", datetime.now(), datetime.now(), user_id))
                 
                 conn.commit()
+                logger.info(f"Updated user {user_id} in database")
                 return True
         except Exception as e:
             logger.error(f"Error updating user: {str(e)}")
@@ -498,52 +489,4 @@ class Database:
                 return [row[0] for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"Error getting scam names: {str(e)}")
-            return []
-
-    def cleanup_old_name_changes(self, days: int = 30):
-        """Clean up old name changes"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    DELETE FROM name_changes 
-                    WHERE changed_at < datetime('now', ?)
-                ''', (f'-{days} days',))
-                deleted_count = cursor.rowcount
-                conn.commit()
-                logger.info(f"Cleaned up {deleted_count} old name changes")
-                return deleted_count
-        except Exception as e:
-            logger.error(f"Error cleaning up old name changes: {str(e)}")
-            return 0
-
-    def cleanup_inactive_users(self, days: int = 90):
-        """Clean up inactive users"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # Mark users as inactive if they haven't been seen
-                cursor.execute('''
-                    UPDATE users 
-                    SET is_active = 0 
-                    WHERE last_checked < datetime('now', ?)
-                    AND user_id NOT IN (
-                        SELECT DISTINCT user_id 
-                        FROM user_groups 
-                        WHERE last_seen > datetime('now', ?)
-                    )
-                ''', (f'-{days} days', f'-{days} days'))
-                
-                # Clean up inactive user groups
-                cursor.execute('''
-                    DELETE FROM user_groups 
-                    WHERE last_seen < datetime('now', ?)
-                ''', (f'-{days} days',))
-                
-                conn.commit()
-                logger.info(f"Cleaned up inactive users and their groups")
-                return True
-        except Exception as e:
-            logger.error(f"Error cleaning up inactive users: {str(e)}")
-            return False 
+            return [] 

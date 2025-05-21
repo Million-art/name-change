@@ -110,42 +110,12 @@ async def start_health_check_server():
 
 # Memory optimization function
 def optimize_memory():
-    """Optimize memory usage"""
     gc.collect()
     if hasattr(gc, 'collect_generations'):
         gc.collect_generations()
-    
-    # Clear any cached data
-    if hasattr(client, '_cache'):
-        client._cache.clear()
-    
-    # Force garbage collection of unused objects
-    gc.set_threshold(100, 5, 5)  # More aggressive garbage collection
-
-async def cleanup_old_data():
-    """Clean up old data periodically"""
-    while True:
-        try:
-            # Clean up old name changes (keep last 30 days)
-            db.cleanup_old_name_changes(days=30)
-            
-            # Clean up inactive users (not seen in 90 days)
-            db.cleanup_inactive_users(days=90)
-            
-            # Optimize memory
-            optimize_memory()
-            
-            # Wait for 24 hours before next cleanup
-            await asyncio.sleep(24 * 60 * 60)
-        except Exception as e:
-            logger.error(f"Error in cleanup task: {str(e)}")
-            await asyncio.sleep(3600)  # Wait 1 hour before retrying
 
 async def periodic_scan():
     """Periodically scan all monitored groups for name changes"""
-    BATCH_SIZE = 100  # Process users in batches of 100
-    RATE_LIMIT_DELAY = 1  # 1 second delay between batches
-    
     while True:
         try:
             logger.info("Starting periodic scan of monitored groups")
@@ -153,39 +123,20 @@ async def periodic_scan():
                 try:
                     # Get all participants at once to reduce API calls
                     participants = await client.get_participants(group_id)
-                    total_participants = len(participants)
-                    logger.info(f"Processing {total_participants} users in group {group_id}")
-                    
-                    # Process users in batches
-                    for i in range(0, total_participants, BATCH_SIZE):
-                        batch = participants[i:i + BATCH_SIZE]
-                        tasks = []
-                        
-                        for user in batch:
-                            if isinstance(user, User):
-                                tasks.append(check_name_changes(user))
-                        
-                        # Process batch concurrently
-                        if tasks:
+                    for user in participants:
+                        if isinstance(user, User):
                             try:
-                                await asyncio.gather(*tasks, return_exceptions=True)
+                                await check_name_changes(user)
                             except FloodWaitError as e:
                                 logger.warning(f"Flood wait required: {e.seconds} seconds")
                                 await asyncio.sleep(e.seconds)
+                                continue
                             except Exception as e:
-                                logger.error(f"Error processing batch: {str(e)}")
-                        
-                        # Rate limiting between batches
-                        await asyncio.sleep(RATE_LIMIT_DELAY)
-                        
-                        # Log progress
-                        progress = min(i + BATCH_SIZE, total_participants)
-                        logger.info(f"Processed {progress}/{total_participants} users in group {group_id}")
-                        
+                                logger.error(f"Error checking user {user.id}: {str(e)}")
+                                continue
                 except Exception as e:
                     logger.error(f"Error scanning group {group_id}: {str(e)}")
                     continue
-                    
         except Exception as e:
             logger.error(f"Error in periodic scan: {str(e)}")
         
@@ -273,97 +224,48 @@ async def check_name_changes(user: User):
                         continue
                     
                     # Ban the user
+                    await client(functions.channels.EditBannedRequest(
+                        channel=group_entity,
+                        participant=user,
+                        banned_rights=types.ChatBannedRights(
+                            until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
+                            view_messages=True,
+                            send_messages=True,
+                            send_media=True,
+                            send_stickers=True,
+                            send_gifs=True,
+                            send_games=True,
+                            send_inline=True,
+                            embed_links=True
+                        )
+                    ))
+                    
+                    # Verify ban by checking participant status
                     try:
-                        # Log group type and details
-                        logger.info(f"Processing ban for group {group['group_name']} (ID: {group['group_id']})")
-                        logger.info(f"Group entity type: {type(group_entity).__name__}")
+                        # Get full participant info
+                        participant = await client(functions.channels.GetParticipantRequest(
+                            channel=group_entity,
+                            participant=user
+                        ))
                         
-                        # Check if it's a supergroup/channel
-                        if isinstance(group_entity, (types.Channel, types.Chat)):
-                            if isinstance(group_entity, types.Channel):
-                                logger.info(f"Using channel ban method for {group['group_name']}")
-                                # For supergroups/channels
-                                try:
-                                    await client(functions.channels.EditBannedRequest(
-                                        channel=group_entity,
-                                        participant=user,
-                                        banned_rights=types.ChatBannedRights(
-                                            until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
-                                            view_messages=True,
-                                            send_messages=True,
-                                            send_media=True,
-                                            send_stickers=True,
-                                            send_gifs=True,
-                                            send_games=True,
-                                            send_inline=True,
-                                            embed_links=True
-                                        )
-                                    ))
-                                    logger.info(f"Channel ban request sent for {group['group_name']}")
-                                except Exception as e:
-                                    logger.error(f"Channel ban error details: {str(e)}")
-                                    raise
-                            else:
-                                logger.info(f"Using regular group ban method for {group['group_name']}")
-                                # For regular groups
-                                try:
-                                    await client(functions.messages.DeleteChatUserRequest(
-                                        chat_id=group_entity.id,
-                                        user_id=user
-                                    ))
-                                    logger.info(f"Regular group ban request sent for {group['group_name']}")
-                                except Exception as e:
-                                    logger.error(f"Regular group ban error details: {str(e)}")
-                                    raise
-                            
-                            # Verify ban by checking participant status
-                            try:
-                                # Get full participant info
-                                if isinstance(group_entity, types.Channel):
-                                    logger.info(f"Verifying channel ban for {group['group_name']}")
-                                    participant = await client(functions.channels.GetParticipantRequest(
-                                        channel=group_entity,
-                                        participant=user
-                                    ))
-                                    # Check if user is banned
-                                    if hasattr(participant.participant, 'banned_rights'):
-                                        ban_results.append(f"✅ {group['group_name']}: Successfully banned")
-                                        logger.info(f"Successfully banned user {user.id} from group {group['group_name']}")
-                                    else:
-                                        ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User not properly banned")
-                                        logger.error(f"Ban verification failed for user {user.id} in group {group['group_name']} - User not properly banned")
-                                else:
-                                    logger.info(f"Verifying regular group ban for {group['group_name']}")
-                                    # For regular groups, try to get chat member
-                                    try:
-                                        await client.get_permissions(group_entity, user)
-                                        ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User still in group")
-                                        logger.error(f"User {user.id} still has permissions in group {group['group_name']}")
-                                    except Exception as e:
-                                        if "User not found" in str(e) or "User is not a participant" in str(e):
-                                            ban_results.append(f"✅ {group['group_name']}: Successfully banned")
-                                            logger.info(f"Successfully banned user {user.id} from group {group['group_name']}")
-                                        else:
-                                            ban_results.append(f"❌ {group['group_name']}: Ban verification error - {str(e)}")
-                                            logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
-                            except Exception as e:
-                                # If we can't get participant info, they might be banned
-                                if "User is banned" in str(e) or "CHANNEL_PRIVATE" in str(e) or "User not found" in str(e):
-                                    ban_results.append(f"✅ {group['group_name']}: Successfully banned (confirmed by error)")
-                                    logger.info(f"Successfully banned user {user.id} from group {group['group_name']} (confirmed by error)")
-                                else:
-                                    ban_results.append(f"❌ {group['group_name']}: Ban verification error - {str(e)}")
-                                    logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
+                        # Check if user is banned
+                        if hasattr(participant.participant, 'banned_rights'):
+                            ban_results.append(f"✅ {group['group_name']}: Successfully banned")
+                            logger.info(f"Successfully banned user {user.id} from group {group['group_name']}")
                         else:
-                            ban_results.append(f"❌ {group['group_name']}: Unsupported group type")
-                            logger.error(f"Unsupported group type for group {group['group_name']}: {type(group_entity).__name__}")
+                            ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User not properly banned")
+                            logger.error(f"Ban verification failed for user {user.id} in group {group['group_name']} - User not properly banned")
                     except Exception as e:
-                        ban_results.append(f"❌ {group['group_name']}: {str(e)}")
-                        logger.error(f"Error banning user {user.id} from group {group['group_name']}: {str(e)}")
-                        logger.error(f"Full error details: {str(e)}", exc_info=True)
+                        # If we can't get participant info, they might be banned
+                        if "User is banned" in str(e) or "CHANNEL_PRIVATE" in str(e):
+                            ban_results.append(f"✅ {group['group_name']}: Successfully banned (confirmed by error)")
+                            logger.info(f"Successfully banned user {user.id} from group {group['group_name']} (confirmed by error)")
+                        else:
+                            ban_results.append(f"❌ {group['group_name']}: Ban verification error - {str(e)}")
+                            logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
                 except Exception as e:
                     ban_results.append(f"❌ {group['group_name']}: {str(e)}")
-                    logger.error(f"Error processing group {group['group_name']}: {str(e)}")
+                    logger.error(f"Error banning user {user.id} from group {group['group_name']}: {str(e)}")
             
             # Send notification with results
             ban_report = "\n".join(ban_results)
@@ -844,9 +746,6 @@ async def main():
         
         # Start ping mechanism
         asyncio.create_task(send_ping())
-        
-        # Start cleanup task
-        asyncio.create_task(cleanup_old_data())
         
         # Ensure we're receiving updates
         me = await client.get_me()
