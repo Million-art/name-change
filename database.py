@@ -120,8 +120,7 @@ class Database:
                         first_name TEXT,
                         last_name TEXT,
                         username TEXT,
-                        last_updated TIMESTAMP,
-                        last_checked TIMESTAMP
+                        last_updated TIMESTAMP
                     )
                 ''')
                 
@@ -211,9 +210,9 @@ class Database:
                 # Update user data
                 cursor.execute('''
                     INSERT OR REPLACE INTO users 
-                    (user_id, first_name, last_name, username, last_updated, last_checked)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (user_id, first_name, last_name, username, datetime.now(), datetime.now()))
+                    (user_id, first_name, last_name, username, last_updated)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (user_id, first_name, last_name, username, datetime.now()))
                 
                 conn.commit()
                 logger.debug(f"Updated user {user_id} in database")
@@ -442,9 +441,9 @@ class Database:
                 # Update user data
                 cursor.execute('''
                     UPDATE users 
-                    SET first_name = ?, last_name = ?, username = ?, last_updated = ?, last_checked = ?
+                    SET first_name = ?, last_name = ?, username = ?, last_updated = ?
                     WHERE user_id = ?
-                ''', (first_name, last_name, username or "", datetime.now(), datetime.now(), user_id))
+                ''', (first_name, last_name, username or "", datetime.now(), user_id))
                 
                 conn.commit()
                 logger.info(f"Updated user {user_id} in database")

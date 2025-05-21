@@ -42,7 +42,6 @@ BOT_TOKEN=your_bot_token
 ADMIN_ID=your_telegram_id
 
 # Optional Variables
-SCAN_INTERVAL=60  # Default: 60 seconds
 MONITORED_GROUPS=group_id1,group_id2  # Optional: Groups to monitor at startup
 RENDER_HEALTH_CHECK=true  # Optional: Required only if deploying on Render.com
 ```
@@ -70,19 +69,6 @@ python main.py
 ### Admin Features
 
 - Receive notifications for all name changes
-- Monitor multiple groups simultaneously
-- Access to detailed change history
-- Manual scan capability
-
-### Group Management
-
-1. Add the bot to your group
-2. Make the bot an admin (recommended)
-3. Send `/start` to begin monitoring
-4. The bot will automatically:
-   - Register all current members
-   - Start monitoring for changes
-   - Track new members as they join
 
 ## Notifications 📬
 

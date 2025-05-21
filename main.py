@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import logging
 import os
 import asyncio
@@ -36,7 +35,6 @@ class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN', '')
     ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
     SESSION_NAME = 'name_change_bot'
-    SCAN_INTERVAL = int(os.getenv('SCAN_INTERVAL', 60))  # Changed to 1 minute for more frequent checks
     MONITORED_GROUPS = [int(x) for x in os.getenv('MONITORED_GROUPS', '').split(',') if x]
     PORT = int(os.getenv('PORT', 8080))  # Railway provides PORT environment variable
     RAILWAY_HEALTH_CHECK = os.getenv('RAILWAY_HEALTH_CHECK', 'true').lower() == 'true'
@@ -115,36 +113,6 @@ def optimize_memory():
     if hasattr(gc, 'collect_generations'):
         gc.collect_generations()
 
-async def periodic_scan():
-    """Periodically scan all monitored groups for name changes"""
-    while True:
-        try:
-            logger.info("Starting periodic scan of monitored groups")
-            for group_id in monitored_groups:
-                try:
-                    # Get all participants at once to reduce API calls
-                    participants = await client.get_participants(group_id)
-                    for user in participants:
-                        if isinstance(user, User):
-                            try:
-                                await check_name_changes(user)
-                            except FloodWaitError as e:
-                                logger.warning(f"Flood wait required: {e.seconds} seconds")
-                                await asyncio.sleep(e.seconds)
-                                continue
-                            except Exception as e:
-                                logger.error(f"Error checking user {user.id}: {str(e)}")
-                                continue
-                except Exception as e:
-                    logger.error(f"Error scanning group {group_id}: {str(e)}")
-                    continue
-        except Exception as e:
-            logger.error(f"Error in periodic scan: {str(e)}")
-        
-        # Optimize memory after each scan
-        optimize_memory()
-        await asyncio.sleep(Config.SCAN_INTERVAL)
-
 async def send_to_admin(message: str):
     """Send notification to admin"""
     try:
@@ -194,10 +162,10 @@ async def check_name_changes(user: User):
             return
 
         # Update the database with new data
-        db.register_user(
+        db.update_user(
             user_id=user.id,
-            first_name=user.first_name,
-            last_name=user.last_name or ""
+            first_name=current_data['first_name'],
+            last_name=current_data['last_name']
         )
 
         # Check if the user's name matches any scam names
@@ -213,7 +181,6 @@ async def check_name_changes(user: User):
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"👤 User: {user.first_name} {user.last_name or ''}\n"
                 f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n"
-                f"💬 [Click to Chat](tg://user?id={user.id})"
              )
             await send_to_admin(scam_message)
             logger.info(f"Sent scam alert for user {user.id}")
@@ -706,13 +673,10 @@ async def main():
         except Exception as e:
             logger.error(f"Could not get update state: {e}", exc_info=True)
 
-        # Start background tasks
-        asyncio.create_task(periodic_scan())
-
         # Initialize monitored groups from database
         users = db.get_all_users()
         if users:
-            # Get all unique group IDs from the database
+            # Get all unique group
             db_groups = set()
             for user in users:
                 for group in user.get('groups', []):
