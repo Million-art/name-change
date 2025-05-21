@@ -615,8 +615,21 @@ class NameChangeBot:
     async def start(self):
         """Start the bot"""
         try:
-            # Start the client
-            await self.client.start(bot_token=Config.BOT_TOKEN)
+            # Start the client with connection retry
+            retry_count = 0
+            max_retries = 5
+            
+            while retry_count < max_retries:
+                try:
+                    await self.client.start(bot_token=Config.BOT_TOKEN)
+                    break
+                except Exception as e:
+                    retry_count += 1
+                    logger.error(f"Connection attempt {retry_count} failed: {str(e)}")
+                    if retry_count < max_retries:
+                        await asyncio.sleep(5)  # Wait 5 seconds before retrying
+                    else:
+                        raise Exception("Failed to connect after maximum retries")
             
             # Get bot info
             me = await self.client.get_me()
@@ -664,8 +677,20 @@ class NameChangeBot:
             )
             logger.info("Bot is ready! Monitoring for name changes...")
 
-            # Keep the bot running
-            await self.client.run_until_disconnected()
+            # Keep the bot running with connection monitoring
+            while True:
+                try:
+                    if not self.client.is_connected():
+                        logger.warning("Bot disconnected, attempting to reconnect...")
+                        await self.client.connect()
+                        if not await self.client.is_user_authorized():
+                            await self.client.start(bot_token=Config.BOT_TOKEN)
+                        logger.info("Bot reconnected successfully")
+                    
+                    await asyncio.sleep(30)  # Check connection every 30 seconds
+                except Exception as e:
+                    logger.error(f"Error in connection monitoring: {str(e)}")
+                    await asyncio.sleep(5)  # Wait before retrying
 
         except Exception as e:
             logger.error(f"Error in bot: {str(e)}", exc_info=True)
