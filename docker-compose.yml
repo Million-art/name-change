@@ -5,10 +5,9 @@ services:
     build: .
     container_name: name_change_bot
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:rw
+    env_file:
+      - .env
     environment:
-      - API_ID=${API_ID}
-      - API_HASH=${API_HASH}
-      - BOT_TOKEN=${BOT_TOKEN}
-      - ADMIN_ID=${ADMIN_ID}
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped 

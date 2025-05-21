@@ -1,6 +1,6 @@
 FROM python:3.9-slim
 
-# Set working directory
+# Set working directory inside container
 WORKDIR /app
 
 # Install system dependencies
@@ -14,10 +14,14 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
+# Copy all files from current directory to /app in container
 COPY . .
 
-# Create a non-root user
+# Add the container's working directory to Python path
+# This helps Python find modules in the src directory
+ENV PYTHONPATH=/app
+
+# Create a non-root user for security
 RUN useradd -m botuser
 RUN chown -R botuser:botuser /app
 USER botuser

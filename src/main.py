@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 
 class NameChangeBot:
     def __init__(self):
-        # Initialize client with basic settings
+        # Initialize client with bot token
         self.client = TelegramClient(
             Config.SESSION_NAME,
             Config.API_ID,
             Config.API_HASH
-        )
+        ).start(bot_token=Config.BOT_TOKEN)
         
         # Initialize database
         self.db = Database()
