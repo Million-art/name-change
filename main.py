@@ -214,31 +214,44 @@ async def check_name_changes(user: User):
                     
                     # Check if bot has admin rights
                     bot_participant = await client.get_permissions(group_entity, await client.get_me())
+                    logger.info(f"Bot permissions in {group['group_name']}: Admin={bot_participant.is_admin}, Ban={bot_participant.ban_users}")
+                    
                     if not bot_participant.is_admin:
                         ban_results.append(f"❌ {group['group_name']}: Bot is not admin")
+                        logger.error(f"Bot is not admin in group {group['group_name']}")
                         continue
                     
                     # Check if bot has ban rights
                     if not bot_participant.ban_users:
                         ban_results.append(f"❌ {group['group_name']}: Bot lacks ban rights")
+                        logger.error(f"Bot lacks ban rights in group {group['group_name']}")
                         continue
                     
+                    # Log ban attempt
+                    logger.info(f"Attempting to ban user {user.id} from group {group['group_name']}")
+                    
                     # Ban the user
-                    await client(functions.channels.EditBannedRequest(
-                        channel=group_entity,
-                        participant=user,
-                        banned_rights=types.ChatBannedRights(
-                            until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
-                            view_messages=True,
-                            send_messages=True,
-                            send_media=True,
-                            send_stickers=True,
-                            send_gifs=True,
-                            send_games=True,
-                            send_inline=True,
-                            embed_links=True
-                        )
-                    ))
+                    try:
+                        await client(functions.channels.EditBannedRequest(
+                            channel=group_entity,
+                            participant=user,
+                            banned_rights=types.ChatBannedRights(
+                                until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
+                                view_messages=True,
+                                send_messages=True,
+                                send_media=True,
+                                send_stickers=True,
+                                send_gifs=True,
+                                send_games=True,
+                                send_inline=True,
+                                embed_links=True
+                            )
+                        ))
+                        logger.info(f"Ban request sent for user {user.id} in group {group['group_name']}")
+                    except Exception as e:
+                        logger.error(f"Error sending ban request: {str(e)}")
+                        ban_results.append(f"❌ {group['group_name']}: Ban request failed - {str(e)}")
+                        continue
                     
                     # Verify ban by checking participant status
                     try:
@@ -247,6 +260,7 @@ async def check_name_changes(user: User):
                             channel=group_entity,
                             participant=user
                         ))
+                        logger.info(f"Got participant info for user {user.id} in group {group['group_name']}")
                         
                         # Check if user is banned
                         if hasattr(participant.participant, 'banned_rights'):
