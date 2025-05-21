@@ -8,7 +8,7 @@ from telethon.tl.types import User, PeerChannel, UpdateUserName, UpdateUser, Upd
 from telethon.errors import FloodWaitError
 from dotenv import load_dotenv
 from database import Database
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiohttp import web, ClientSession
 import gc
 
@@ -17,7 +17,7 @@ logging.basicConfig(
     format='[%(levelname)s] %(asctime)s - %(message)s',
     level=logging.INFO,
     handlers=[
-        logging.FileHandler('name_tracker.log'),
+        logging.FileHandler('name_tracker.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -192,44 +192,94 @@ async def check_name_changes(user: User):
             logger.info(f"Registered new user {user.id} in database")
             return
 
-        changes = []
+        # Update the database with new data
+        db.update_user(
+            user_id=user.id,
+            first_name=current_data['first_name'],
+            last_name=current_data['last_name']
+        )
 
-        # Check first name
-        if db_user['first_name'] != current_data['first_name']:
-            changes.append(f"👤 First name: {db_user['first_name']} -> {current_data['first_name']}")
-
-        # Check last name
-        if db_user['last_name'] != current_data['last_name']:
-            changes.append(f"👤 Last name: {db_user['last_name']} -> {current_data['last_name']}")
-
-        # Only update database if changes were detected
-        if changes:
-            # Update database with new data
-            db.register_user(
-                user_id=user.id,
-                first_name=user.first_name,
-                last_name=user.last_name or ""
-            )
-            
+        # Check if the user's name matches any scam names
+        scam_names = db.get_scam_names()
+        full_name = f"{current_data['first_name']} {current_data['last_name']}".strip().lower()
+        
+        if any(scam_name.lower() in full_name for scam_name in scam_names):
             # Get user's active groups for context
             group_names = [g['group_name'] for g in active_groups]
+            ban_results = []
+            
+            for group in active_groups:
+                try:
+                    group_entity = await client.get_entity(group['group_id'])
+                    
+                    # Check if bot has admin rights
+                    bot_participant = await client.get_permissions(group_entity, await client.get_me())
+                    if not bot_participant.is_admin:
+                        ban_results.append(f"❌ {group['group_name']}: Bot is not admin")
+                        continue
+                    
+                    # Check if bot has ban rights
+                    if not bot_participant.ban_users:
+                        ban_results.append(f"❌ {group['group_name']}: Bot lacks ban rights")
+                        continue
+                    
+                    # Ban the user
+                    await client(functions.channels.EditBannedRequest(
+                        channel=group_entity,
+                        participant=user,
+                        banned_rights=types.ChatBannedRights(
+                            until_date=int((datetime.now() + timedelta(days=365)).timestamp()),
+                            view_messages=True,
+                            send_messages=True,
+                            send_media=True,
+                            send_stickers=True,
+                            send_gifs=True,
+                            send_games=True,
+                            send_inline=True,
+                            embed_links=True
+                        )
+                    ))
+                    
+                    # Verify ban by checking participant status
+                    try:
+                        # Get full participant info
+                        participant = await client(functions.channels.GetParticipantRequest(
+                            channel=group_entity,
+                            participant=user
+                        ))
+                        
+                        # Check if user is banned
+                        if hasattr(participant.participant, 'banned_rights'):
+                            ban_results.append(f"✅ {group['group_name']}: Successfully banned")
+                            logger.info(f"Successfully banned user {user.id} from group {group['group_name']}")
+                        else:
+                            ban_results.append(f"❌ {group['group_name']}: Ban verification failed - User not properly banned")
+                            logger.error(f"Ban verification failed for user {user.id} in group {group['group_name']} - User not properly banned")
+                    except Exception as e:
+                        # If we can't get participant info, they might be banned
+                        if "User is banned" in str(e) or "CHANNEL_PRIVATE" in str(e):
+                            ban_results.append(f"✅ {group['group_name']}: Successfully banned (confirmed by error)")
+                            logger.info(f"Successfully banned user {user.id} from group {group['group_name']} (confirmed by error)")
+                        else:
+                            ban_results.append(f"❌ {group['group_name']}: Ban verification error - {str(e)}")
+                            logger.error(f"Error verifying ban for user {user.id} in group {group['group_name']}: {str(e)}")
+                except Exception as e:
+                    ban_results.append(f"❌ {group['group_name']}: {str(e)}")
+                    logger.error(f"Error banning user {user.id} from group {group['group_name']}: {str(e)}")
+            
+            # Send notification with results
+            ban_report = "\n".join(ban_results)
+            scam_message = (
+                "⚠️ Scam Alert - User Banned!\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 User: {user.first_name} {user.last_name or ''}\n"
+                f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n"
+             )
+            await send_to_admin(scam_message)
+            logger.info(f"Sent scam alert and ban report for user {user.id}")
 
-            message = (
-                f"👤 User ID: `{user.id}`\n"
-                f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n\n"    
-                + "\n".join(changes)
-            )
-            await send_to_admin(message)
-            logger.info(f"Sent name change notification for user {user.id}")
-        else:
-            logger.debug(f"No name changes detected for user {user.id}")
-
-    except FloodWaitError as e:
-        logger.warning(f"Flood wait required: {e.seconds} seconds")
-        await asyncio.sleep(e.seconds)
-        await check_name_changes(user)  # Retry after waiting
     except Exception as e:
-        logger.error(f"Error checking name changes: {e}")
+        logger.error(f"Error checking name changes for user {user.id}: {str(e)}")
 
 async def notify_user_left(user_id: int, group_id: int, group_name: str):
     """Notify admin when a user leaves a group"""
@@ -250,7 +300,6 @@ async def notify_user_left(user_id: int, group_id: int, group_name: str):
             "👋 User Left Group Notification\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             f"👤 User: {user.first_name} {user.last_name or ''}\n"
-            f"🆔 User ID: `{user_id}`\n"
             f"🚪 Left Group: {group_name}\n"
             f"💬 [Click to Chat]({chat_link})\n"
         )
@@ -554,6 +603,60 @@ async def status_command(event):
         await event.reply("\n".join(status_msg))
     except Exception as e:
         logger.error(f"Error in status command: {str(e)}")
+
+@client.on(events.NewMessage(pattern='/add_scam'))
+async def add_scam_command(event):
+    if event.sender_id != Config.ADMIN_ID:
+        await event.respond("❌ You are not authorized to use this command.")
+        return
+    try:
+        args = event.text.split(maxsplit=1)
+        if len(args) < 2:
+            await event.respond("Usage: /add_scam [name]")
+            return
+        name = args[1].strip()
+        if db.add_scam_name(name):
+            await event.respond(f"✅ Added '{name}' to scam names.")
+        else:
+            await event.respond("❌ Failed to add scam name.")
+    except Exception as e:
+        logger.error(f"Error in add_scam command: {str(e)}")
+        await event.respond("❌ An error occurred.")
+
+@client.on(events.NewMessage(pattern='/remove_scam'))
+async def remove_scam_command(event):
+    if event.sender_id != Config.ADMIN_ID:
+        await event.respond("❌ You are not authorized to use this command.")
+        return
+    try:
+        args = event.text.split(maxsplit=1)
+        if len(args) < 2:
+            await event.respond("Usage: /remove_scam [name]")
+            return
+        name = args[1].strip()
+        if db.remove_scam_name(name):
+            await event.respond(f"✅ Removed '{name}' from scam names.")
+        else:
+            await event.respond("❌ Failed to remove scam name.")
+    except Exception as e:
+        logger.error(f"Error in remove_scam command: {str(e)}")
+        await event.respond("❌ An error occurred.")
+
+@client.on(events.NewMessage(pattern='/view_scam_names'))
+async def view_scam_names_command(event):
+    if event.sender_id != Config.ADMIN_ID:
+        await event.respond("❌ You are not authorized to use this command.")
+        return
+    try:
+        scam_names = db.get_scam_names()
+        if scam_names:
+            message = "📋 Scam Names List:\n" + "\n".join(scam_names)
+        else:
+            message = "No scam names found."
+        await event.respond(message)
+    except Exception as e:
+        logger.error(f"Error in view_scam_names command: {str(e)}")
+        await event.respond("❌ An error occurred.")
 
 @client.on(events.NewMessage(pattern='/scan'))
 async def manual_scan_command(event):

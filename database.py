@@ -90,6 +90,17 @@ class Database:
                         )
                     ''')
                 
+                # Check if scam_names table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scam_names'")
+                if not cursor.fetchone():
+                    logger.info("Creating scam_names table")
+                    cursor.execute('''
+                        CREATE TABLE scam_names (
+                            id INTEGER PRIMARY KEY,
+                            name TEXT UNIQUE
+                        )
+                    ''')
+                
                 conn.commit()
                 logger.info("Database migration completed successfully")
         except Exception as e:
@@ -147,6 +158,14 @@ class Database:
                         new_value TEXT,
                         changed_at TIMESTAMP,
                         FOREIGN KEY (user_id) REFERENCES users(user_id)
+                    )
+                ''')
+                
+                # Create scam_names table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS scam_names (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT UNIQUE
                     )
                 ''')
                 
@@ -390,4 +409,84 @@ class Database:
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"Error getting user active groups: {str(e)}")
+            return []
+
+    def update_user(self, user_id: int, first_name: str, last_name: str, username: str = None):
+        """Update user information in the database"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Get existing user data
+                cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+                existing_user = cursor.fetchone()
+                
+                if existing_user:
+                    # Check for changes
+                    changes = []
+                    if existing_user['first_name'] != first_name:
+                        changes.append(('first_name', existing_user['first_name'], first_name))
+                    if existing_user['last_name'] != last_name:
+                        changes.append(('last_name', existing_user['last_name'], last_name))
+                    if username and existing_user['username'] != username:
+                        changes.append(('username', existing_user['username'], username))
+                    
+                    # Record changes
+                    for change_type, old_value, new_value in changes:
+                        cursor.execute('''
+                            INSERT INTO name_changes 
+                            (user_id, change_type, old_value, new_value, changed_at)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (user_id, change_type, old_value, new_value, datetime.now()))
+                        logger.info(f"Recorded {change_type} change for user {user_id}: {old_value} -> {new_value}")
+                
+                # Update user data
+                cursor.execute('''
+                    UPDATE users 
+                    SET first_name = ?, last_name = ?, username = ?, last_updated = ?, last_checked = ?
+                    WHERE user_id = ?
+                ''', (first_name, last_name, username or "", datetime.now(), datetime.now(), user_id))
+                
+                conn.commit()
+                logger.info(f"Updated user {user_id} in database")
+                return True
+        except Exception as e:
+            logger.error(f"Error updating user: {str(e)}")
+            return False
+
+    def add_scam_name(self, name: str):
+        """Add a new scam name to the scam_names table"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('INSERT INTO scam_names (name) VALUES (?)', (name,))
+                conn.commit()
+                logger.info(f"Successfully added scam name: {name}")
+                return True
+        except Exception as e:
+            logger.error(f"Error adding scam name: {str(e)}")
+            return False
+
+    def remove_scam_name(self, name: str):
+        """Remove a scam name from the scam_names table"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM scam_names WHERE name = ?', (name,))
+                conn.commit()
+                logger.info(f"Successfully removed scam name: {name}")
+                return True
+        except Exception as e:
+            logger.error(f"Error removing scam name: {str(e)}")
+            return False
+
+    def get_scam_names(self):
+        """Get all scam names from the scam_names table"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT name FROM scam_names')
+                return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error getting scam names: {str(e)}")
             return [] 
