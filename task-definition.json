@@ -1,0 +1,44 @@
+{
+    "family": "name-change-bot",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "256",
+    "memory": "512",
+    "executionRoleArn": "arn:aws:iam::<YOUR_ACCOUNT_ID>:role/ecsTaskExecutionRole",
+    "taskRoleArn": "arn:aws:iam::<YOUR_ACCOUNT_ID>:role/ecsTaskRole",
+    "containerDefinitions": [
+        {
+            "name": "name-change-bot",
+            "image": "<YOUR_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/name-change-bot:latest",
+            "essential": true,
+            "environment": [
+                {
+                    "name": "API_ID",
+                    "value": "<YOUR_API_ID>"
+                },
+                {
+                    "name": "API_HASH",
+                    "value": "<YOUR_API_HASH>"
+                },
+                {
+                    "name": "BOT_TOKEN",
+                    "value": "<YOUR_BOT_TOKEN>"
+                },
+                {
+                    "name": "ADMIN_ID",
+                    "value": "<YOUR_ADMIN_ID>"
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/name-change-bot",
+                    "awslogs-region": "<REGION>",
+                    "awslogs-stream-prefix": "ecs"
+                }
+            }
+        }
+    ]
+} 
