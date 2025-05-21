@@ -668,7 +668,16 @@ class NameChangeBot:
             # Start web server for Render
             await self.start_web_server()
 
-            # Add name change handlers for all update types
+            # Add name change handlers
+            @self.client.on(events.UserUpdate)
+            async def handle_user_update(event):
+                """Handle user updates including name changes"""
+                try:
+                    logger.info(f"Received user update event: {event}")
+                    await self.handle_name_change(event)
+                except Exception as e:
+                    logger.error(f"Error in user update handler: {str(e)}", exc_info=True)
+
             @self.client.on(events.Raw)
             async def handle_raw(event):
                 """Handle raw events for name changes"""
@@ -687,53 +696,6 @@ class NameChangeBot:
                     if isinstance(event, UpdateUserName):
                         logger.info(f"Processing UpdateUserName event for user {event.user_id}")
                         await self.handle_name_change(event)
-                        return
-                    
-                    # Handle UpdateChannelParticipant
-                    if isinstance(event, UpdateChannelParticipant):
-                        logger.info(f"Processing UpdateChannelParticipant event: {event}")
-                        try:
-                            user = await self.client.get_entity(event.user_id)
-                            if isinstance(user, User):
-                                logger.info(f"User {user.id} updated in channel: {event.channel_id}")
-                                logger.info(f"User details: {user}")
-                                # Create a synthetic UpdateUser event
-                                update_event = UpdateUser(user=user)
-                                await self.handle_name_change(update_event)
-                        except Exception as e:
-                            logger.error(f"Error processing UpdateChannelParticipant: {str(e)}")
-                        return
-
-                    # Handle UpdateChatParticipant
-                    if hasattr(event, 'participant') and hasattr(event, 'chat_id'):
-                        logger.info(f"Processing UpdateChatParticipant event: {event}")
-                        try:
-                            user = await self.client.get_entity(event.participant.user_id)
-                            if isinstance(user, User):
-                                logger.info(f"User {user.id} updated in chat: {event.chat_id}")
-                                logger.info(f"User details: {user}")
-                                # Create a synthetic UpdateUser event
-                                update_event = UpdateUser(user=user)
-                                await self.handle_name_change(update_event)
-                        except Exception as e:
-                            logger.error(f"Error processing UpdateChatParticipant: {str(e)}")
-                        return
-
-                    # Handle UpdateChatParticipants
-                    if hasattr(event, 'participants'):
-                        logger.info(f"Processing UpdateChatParticipants event: {event}")
-                        try:
-                            for participant in event.participants:
-                                if hasattr(participant, 'user_id'):
-                                    user = await self.client.get_entity(participant.user_id)
-                                    if isinstance(user, User):
-                                        logger.info(f"User {user.id} updated in chat participants")
-                                        logger.info(f"User details: {user}")
-                                        # Create a synthetic UpdateUser event
-                                        update_event = UpdateUser(user=user)
-                                        await self.handle_name_change(update_event)
-                        except Exception as e:
-                            logger.error(f"Error processing UpdateChatParticipants: {str(e)}")
                         return
 
                 except Exception as e:
