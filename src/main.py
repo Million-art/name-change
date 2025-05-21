@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from telethon import TelegramClient, events
-from telethon.tl.types import User, UpdateUser, UpdateUserName, PeerChannel
+from telethon.tl.types import User, UpdateUser, UpdateUserName, PeerChannel, UpdateChannelParticipant
 from src.config.config import Config
 from src.database import Database
 
@@ -48,6 +48,18 @@ class NameChangeBot:
                 except Exception as e:
                     logger.error(f"Error fetching user for UpdateUserName event: {str(e)}")
                     return
+            elif isinstance(event, UpdateChannelParticipant):
+                logger.info(f"Processing UpdateChannelParticipant event: {event}")
+                try:
+                    user = await self.client.get_entity(event.user_id)
+                    if isinstance(user, User):
+                        logger.info(f"User {user.id} updated in channel: {event.channel_id}")
+                        # Create a synthetic UpdateUser event
+                        update_event = UpdateUser(user=user)
+                        await self.handle_name_change(update_event)
+                except Exception as e:
+                    logger.error(f"Error processing UpdateChannelParticipant: {str(e)}")
+                return
             else:
                 logger.debug(f"Ignoring unsupported update type: {type(event)}")
                 return
@@ -641,9 +653,33 @@ class NameChangeBot:
                 """Handle raw events for name changes"""
                 try:
                     logger.info(f"Received raw event: {type(event)}")
-                    if isinstance(event, (UpdateUser, UpdateUserName)):
-                        logger.info(f"Processing name change event: {type(event)}")
+                    
+                    # Handle UpdateUser
+                    if isinstance(event, UpdateUser):
+                        logger.info(f"Processing UpdateUser event for user {event.user.id}")
                         await self.handle_name_change(event)
+                        return
+                    
+                    # Handle UpdateUserName
+                    if isinstance(event, UpdateUserName):
+                        logger.info(f"Processing UpdateUserName event for user {event.user_id}")
+                        await self.handle_name_change(event)
+                        return
+                    
+                    # Handle UpdateChannelParticipant (for group member updates)
+                    if isinstance(event, UpdateChannelParticipant):
+                        logger.info(f"Processing UpdateChannelParticipant event: {event}")
+                        try:
+                            user = await self.client.get_entity(event.user_id)
+                            if isinstance(user, User):
+                                logger.info(f"User {user.id} updated in channel: {event.channel_id}")
+                                # Create a synthetic UpdateUser event
+                                update_event = UpdateUser(user=user)
+                                await self.handle_name_change(update_event)
+                        except Exception as e:
+                            logger.error(f"Error processing UpdateChannelParticipant: {str(e)}")
+                        return
+
                 except Exception as e:
                     logger.error(f"Error in raw event handler: {str(e)}", exc_info=True)
 
