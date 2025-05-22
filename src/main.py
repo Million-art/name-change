@@ -2,6 +2,7 @@ import asyncio
 import logging
 from telethon import TelegramClient, events
 from telethon.tl.types import User, UpdateUser, UpdateUserName, PeerChannel, UpdateChannelParticipant
+from telethon.network import ConnectionTcpFull
 from src.config.config import Config
 from src.database import Database
 import os
