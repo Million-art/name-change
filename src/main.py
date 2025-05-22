@@ -27,7 +27,18 @@ class NameChangeBot:
             app_version="1.0",
             device_model="Python",
             lang_code="en",
-            receive_updates=True  # Explicitly enable updates
+            receive_updates=True,  # Explicitly enable updates
+            auto_reconnect=True,   # Enable auto reconnect
+            retry_delay=1,         # Retry delay in seconds
+            connection_retries=5,  # Number of connection retries
+            timeout=30,           # Connection timeout
+            request_retries=5,    # Number of request retries
+            flood_sleep_threshold=60,  # Flood sleep threshold
+            use_ipv6=False,       # Disable IPv6
+            proxy=None,           # No proxy
+            local_addr=None,      # No local address
+            connection=ConnectionTcpFull,  # Use full connection
+            sequential_updates=True  # Process updates sequentially
         )
         
         # Initialize database
@@ -691,7 +702,6 @@ class NameChangeBot:
                             user = await self.client.get_entity(event.user_id)
                             if isinstance(user, User):
                                 logger.info(f"User details: {user}")
-                                # Pass the user directly to handle_name_change
                                 await self.handle_name_change(user)
                             else:
                                 logger.warning(f"Could not get User object for UpdateUserName event: {event.user_id}")
@@ -730,6 +740,19 @@ class NameChangeBot:
                 self.handle_user_leave,
                 events.ChatAction(func=lambda e: e.user_left)
             )
+
+            # Add user update handler
+            @self.client.on(events.UserUpdate)
+            async def handle_user_update(event):
+                """Handle user updates"""
+                try:
+                    logger.info(f"Received UserUpdate event: {event}")
+                    user = event.user
+                    if isinstance(user, User):
+                        logger.info(f"Processing UserUpdate for user {user.id}")
+                        await self.handle_name_change(user)
+                except Exception as e:
+                    logger.error(f"Error in user update handler: {str(e)}", exc_info=True)
 
             logger.info("All event handlers registered successfully")
             
