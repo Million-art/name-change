@@ -704,6 +704,7 @@ class NameChangeBot:
                             user = await self.client.get_entity(event.user_id)
                             if isinstance(user, User):
                                 logger.info(f"User details: {user}")
+                                # Create UpdateUser event correctly
                                 update_event = UpdateUser(user=user)
                                 await self.handle_name_change(update_event)
                         except Exception as e:
