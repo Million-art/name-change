@@ -9,8 +9,14 @@ logger = logging.getLogger(__name__)
 class Database:
     def __init__(self):
         """Initialize database connection"""
-        self.db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'name_change.db')
+        # Use environment variable for database path with fallback
+        db_dir = os.getenv('DB_DIR', os.path.dirname(os.path.dirname(__file__)))
+        self.db_path = os.path.join(db_dir, 'name_change.db')
         logger.info(f"Initializing database at: {self.db_path}")
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self.create_tables()

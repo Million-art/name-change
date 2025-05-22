@@ -17,12 +17,18 @@ logger = logging.getLogger(__name__)
 
 class NameChangeBot:
     def __init__(self):
-        # Initialize client with bot token
+        """Initialize the bot"""
+        # Initialize client with bot token and explicit update settings
         self.client = TelegramClient(
             Config.SESSION_NAME,
             Config.API_ID,
-            Config.API_HASH
-        ).start(bot_token=Config.BOT_TOKEN)
+            Config.API_HASH,
+            system_version="4.16.30-vxCUSTOM",  # Custom system version to ensure updates
+            app_version="1.0",
+            device_model="Python",
+            lang_code="en",
+            receive_updates=True  # Explicitly enable updates
+        )
         
         # Initialize database
         self.db = Database()
@@ -37,11 +43,19 @@ class NameChangeBot:
 
     async def start_web_server(self):
         """Start the web server for Render"""
-        runner = web.AppRunner(self.app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
-        await site.start()
-        logger.info(f"Web server started on port {os.getenv('PORT', 8080)}")
+        try:
+            runner = web.AppRunner(self.app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
+            await site.start()
+            logger.info(f"Web server started on port {os.getenv('PORT', 8080)}")
+            
+            # Keep the web server running in the background
+            while True:
+                await asyncio.sleep(3600)  # Check every hour
+        except Exception as e:
+            logger.error(f"Error in web server: {str(e)}")
+            raise
 
     async def handle_name_change(self, event):
         """Handle user name changes"""
@@ -643,32 +657,32 @@ class NameChangeBot:
             await event.reply("❌ An error occurred while fetching the scam names list.")
 
     async def start(self):
-        """Start the bot"""
+        """Start the bot and web server"""
         try:
-            # Start the client with connection retry
-            retry_count = 0
-            max_retries = 5
+            # Start the client with explicit update settings
+            logger.info("Starting Telegram client...")
+            await self.client.start(
+                bot_token=Config.BOT_TOKEN,
+                phone=None,  # Not using phone login
+                code_callback=None,  # Not using phone login
+                password=None,  # Not using 2FA
+                first_name="Name Change Bot",
+                last_name="",
+                max_attempts=3
+            )
             
-            while retry_count < max_retries:
-                try:
-                    await self.client.start(bot_token=Config.BOT_TOKEN)
-                    break
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"Connection attempt {retry_count} failed: {str(e)}")
-                    if retry_count < max_retries:
-                        await asyncio.sleep(5)  # Wait 5 seconds before retrying
-                    else:
-                        raise Exception("Failed to connect after maximum retries")
-            
-            # Get bot info
+            # Get bot info for verification
             me = await self.client.get_me()
-            logger.info(f"Bot started as @{me.username}")
-
-            # Start web server for Render
-            await self.start_web_server()
-
-            # Add name change handlers
+            logger.info(f"Bot started as @{me.username} (ID: {me.id})")
+            
+            # Start the web server in a separate task
+            logger.info("Starting web server...")
+            web_server_task = asyncio.create_task(self.start_web_server())
+            
+            # Register event handlers with detailed logging
+            logger.info("Registering event handlers...")
+            
+            # Handle all raw updates
             @self.client.on(events.Raw)
             async def handle_raw(event):
                 """Handle raw events for name changes"""
@@ -705,8 +719,8 @@ class NameChangeBot:
             self.client.add_event_handler(self.add_scam_command, events.NewMessage(pattern='/addscam'))
             self.client.add_event_handler(self.remove_scam_command, events.NewMessage(pattern='/removescam'))
             self.client.add_event_handler(self.list_scam_command, events.NewMessage(pattern='/listscam'))
-
-            # Add user join/leave handlers
+            
+            # Add user join/leave handlers with more specific filters
             self.client.add_event_handler(
                 self.handle_user_join,
                 events.ChatAction(func=lambda e: e.user_joined)
@@ -716,6 +730,8 @@ class NameChangeBot:
                 events.ChatAction(func=lambda e: e.user_left)
             )
 
+            logger.info("All event handlers registered successfully")
+            
             # Send startup message to admin
             await self.client.send_message(
                 Config.ADMIN_ID,
@@ -727,9 +743,10 @@ class NameChangeBot:
                 "/removescam <name> - Remove a scam name\n"
                 "/listscam - View all scam names"
             )
+            logger.info("Startup message sent to admin")
+            
+            # Run the client until disconnected with connection monitoring
             logger.info("Bot is ready! Monitoring for name changes...")
-
-            # Keep the bot running with connection monitoring
             while True:
                 try:
                     if not self.client.is_connected():
@@ -739,13 +756,13 @@ class NameChangeBot:
                             await self.client.start(bot_token=Config.BOT_TOKEN)
                         logger.info("Bot reconnected successfully")
                     
-                    await asyncio.sleep(30)  # Check connection every 30 seconds
+                    await self.client.run_until_disconnected()
                 except Exception as e:
                     logger.error(f"Error in connection monitoring: {str(e)}")
                     await asyncio.sleep(5)  # Wait before retrying
-
+            
         except Exception as e:
-            logger.error(f"Error in bot: {str(e)}", exc_info=True)
+            logger.error(f"Error in bot startup: {str(e)}", exc_info=True)
             raise
 
 if __name__ == '__main__':
