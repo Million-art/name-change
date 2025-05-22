@@ -107,19 +107,24 @@ class NameChangeBot:
                 logger.info(f"Registered new user {user.id}")
                 return
 
-            # Check for changes
+            # Check for actual changes
             changes = []
-            if existing_user['first_name'] != user.first_name:
-                changes.append(('First Name', existing_user['first_name'], user.first_name or "Unknown"))
-                logger.info(f"First name change detected for user {user.id}: {existing_user['first_name']} -> {user.first_name or 'Unknown'}")
+            old_full_name = f"{existing_user['first_name']} {existing_user['last_name']}".strip()
+            new_full_name = f"{user.first_name or 'Unknown'} {user.last_name or ''}".strip()
             
-            if existing_user['last_name'] != user.last_name:
-                changes.append(('Last Name', existing_user['last_name'], user.last_name or ""))
-                logger.info(f"Last name change detected for user {user.id}: {existing_user['last_name']} -> {user.last_name or ''}")
+            if old_full_name != new_full_name:
+                changes.append(('Full Name', old_full_name, new_full_name))
+                logger.info(f"Name change detected for user {user.id}:")
+                logger.info(f"  From: {old_full_name}")
+                logger.info(f"  To: {new_full_name}")
             
             if existing_user['username'] != user.username:
-                changes.append(('Username', existing_user['username'], user.username or ""))
-                logger.info(f"Username change detected for user {user.id}: {existing_user['username']} -> {user.username or ''}")
+                old_username = existing_user['username'] or "none"
+                new_username = user.username or "none"
+                changes.append(('Username', old_username, new_username))
+                logger.info(f"Username change detected for user {user.id}:")
+                logger.info(f"  From: @{old_username}")
+                logger.info(f"  To: @{new_username}")
 
             if changes:
                 logger.info(f"Detected {len(changes)} changes for user {user.id}")
@@ -136,7 +141,6 @@ class NameChangeBot:
                 logger.info(f"Retrieved {len(scam_names)} scam names from database")
 
                 # Check if new name matches any scam names
-                new_full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
                 is_scammer = False
                 matched_scam_names = []
 
@@ -212,8 +216,8 @@ class NameChangeBot:
                     # Prepare concise notification message
                     change_msg = [
                         f"🚨 Scammer Detected & Banned",
-                        f"From: {existing_user['first_name']} {existing_user['last_name']}",
-                        f"To: {user.first_name} {user.last_name}",
+                        f"From: {old_full_name}",
+                        f"To: {new_full_name}",
                         f"Group: {', '.join(g['group_name'] for g in user_groups)}"
                     ]
 
