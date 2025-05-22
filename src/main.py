@@ -438,17 +438,22 @@ class NameChangeBot:
             # Add all current members to tracking
             count = 0
             errors = 0
-            async for user in self.client.iter_participants(chat):
+            async for user in self.client.iter_participants(chat, aggressive=True):
                 if isinstance(user, User):
                     try:
-                        self.db.register_user(
-                            user_id=user.id,
-                            first_name=user.first_name or "Unknown",
-                            last_name=user.last_name or "",
-                            username=user.username or ""
-                        )
-                        if self.db.add_user_to_group(user.id, group_id):
-                            count += 1
+                        # Get full user info to ensure we have the latest data
+                        full_user = await self.client.get_entity(user.id)
+                        if isinstance(full_user, User):
+                            logger.info(f"Registering user {full_user.id}: {full_user.first_name} {full_user.last_name}")
+                            self.db.register_user(
+                                user_id=full_user.id,
+                                first_name=full_user.first_name or "Unknown",
+                                last_name=full_user.last_name or "",
+                                username=full_user.username or ""
+                            )
+                            if self.db.add_user_to_group(full_user.id, group_id):
+                                count += 1
+                                logger.info(f"Added new user {full_user.id} to group {group_id}")
                     except Exception as e:
                         logger.error(f"Error adding user {user.id} to group: {str(e)}")
                         errors += 1
@@ -682,13 +687,28 @@ class NameChangeBot:
                     if isinstance(event, UpdateUserName):
                         logger.info(f"Processing UpdateUserName event for user {event.user_id}")
                         try:
+                            # Get full user info to ensure we have the latest data
                             user = await self.client.get_entity(event.user_id)
                             if isinstance(user, User):
                                 logger.info(f"User details: {user}")
-                                # Instead of creating UpdateUser, pass the user directly
+                                # Pass the user directly to handle_name_change
                                 await self.handle_name_change(user)
+                            else:
+                                logger.warning(f"Could not get User object for UpdateUserName event: {event.user_id}")
                         except Exception as e:
                             logger.error(f"Error processing UpdateUserName: {str(e)}")
+                        return
+
+                    # Handle UpdateChannelParticipant
+                    if isinstance(event, UpdateChannelParticipant):
+                        logger.info(f"Processing UpdateChannelParticipant event: {event}")
+                        try:
+                            user = await self.client.get_entity(event.user_id)
+                            if isinstance(user, User):
+                                logger.info(f"User {user.id} updated in channel: {event.channel_id}")
+                                await self.handle_name_change(user)
+                        except Exception as e:
+                            logger.error(f"Error processing UpdateChannelParticipant: {str(e)}")
                         return
 
                 except Exception as e:
