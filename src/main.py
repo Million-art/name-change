@@ -1,8 +1,9 @@
 import asyncio
 import logging
 from telethon import TelegramClient, events
-from telethon.tl.types import User, UpdateUser, UpdateUserName, PeerChannel, UpdateChannelParticipant
+from telethon.tl.types import User, UpdateUser, UpdateUserName, PeerChannel, UpdateChannelParticipant, UpdateUserStatus
 from telethon.network import ConnectionTcpFull
+from telethon.tl.functions.users import GetFullUserRequest
 from src.config.config import Config
 from src.database import Database
 import os
@@ -24,22 +25,22 @@ class NameChangeBot:
             Config.SESSION_NAME,
             Config.API_ID,
             Config.API_HASH,
-            system_version="4.16.30-vxCUSTOM",  # Custom system version to ensure updates
+            system_version="4.16.30-vxCUSTOM",
             app_version="1.0",
             device_model="Python",
             lang_code="en",
-            receive_updates=True,  # Explicitly enable updates
-            auto_reconnect=True,   # Enable auto reconnect
-            retry_delay=1,         # Retry delay in seconds
-            connection_retries=5,  # Number of connection retries
-            timeout=30,           # Connection timeout
-            request_retries=5,    # Number of request retries
-            flood_sleep_threshold=60,  # Flood sleep threshold
-            use_ipv6=False,       # Disable IPv6
-            proxy=None,           # No proxy
-            local_addr=None,      # No local address
-            connection=ConnectionTcpFull,  # Use full connection
-            sequential_updates=True  # Process updates sequentially
+            receive_updates=True,
+            auto_reconnect=True,
+            retry_delay=1,
+            connection_retries=5,
+            timeout=30,
+            request_retries=5,
+            flood_sleep_threshold=60,
+            use_ipv6=False,
+            proxy=None,
+            local_addr=None,
+            connection=ConnectionTcpFull,
+            sequential_updates=True
         )
         
         # Initialize database
@@ -48,6 +49,9 @@ class NameChangeBot:
         # Initialize web app for Render
         self.app = web.Application()
         self.app.router.add_get('/', self.handle_web_request)
+        
+        # Store last known user states
+        self.user_states = {}
 
     async def handle_web_request(self, request):
         """Handle web requests for Render"""
@@ -654,30 +658,69 @@ class NameChangeBot:
             logger.error(f"Error in list_scam command: {str(e)}", exc_info=True)
             await event.reply("❌ An error occurred while fetching the scam names list.")
 
+    async def check_user_changes(self, user_id):
+        """Check for user changes by fetching full user info"""
+        try:
+            # Get full user info
+            full_user = await self.client(GetFullUserRequest(user_id))
+            if not full_user or not full_user.users:
+                return
+            
+            user = full_user.users[0]  # Get the first user from the users list
+            if not isinstance(user, User):
+                return
+
+            # Get existing user data
+            existing_user = self.db.get_user(user.id)
+            if not existing_user:
+                # New user, register them
+                self.db.register_user(
+                    user_id=user.id,
+                    first_name=user.first_name or "Unknown",
+                    last_name=user.last_name or "",
+                    username=user.username or ""
+                )
+                return
+
+            # Check for changes
+            changes = []
+            if existing_user['first_name'] != user.first_name:
+                changes.append(('First Name', existing_user['first_name'], user.first_name or "Unknown"))
+            if existing_user['last_name'] != user.last_name:
+                changes.append(('Last Name', existing_user['last_name'], user.last_name or ""))
+            if existing_user['username'] != user.username:
+                changes.append(('Username', existing_user['username'], user.username or ""))
+
+            if changes:
+                logger.info(f"Detected {len(changes)} changes for user {user.id}")
+                await self.handle_name_change(user)
+        except Exception as e:
+            logger.error(f"Error checking user changes: {str(e)}", exc_info=True)
+
     async def start(self):
         """Start the bot and web server"""
         try:
-            # Start the client with explicit update settings
+            # Start the client
             logger.info("Starting Telegram client...")
             await self.client.start(
                 bot_token=Config.BOT_TOKEN,
-                phone=None,  # Not using phone login
-                code_callback=None,  # Not using phone login
-                password=None,  # Not using 2FA
+                phone=None,
+                code_callback=None,
+                password=None,
                 first_name="Name Change Bot",
                 last_name="",
                 max_attempts=3
             )
             
-            # Get bot info for verification
+            # Get bot info
             me = await self.client.get_me()
             logger.info(f"Bot started as @{me.username} (ID: {me.id})")
             
-            # Start the web server in a separate task
+            # Start web server
             logger.info("Starting web server...")
             web_server_task = asyncio.create_task(self.start_web_server())
             
-            # Register event handlers with detailed logging
+            # Register event handlers
             logger.info("Registering event handlers...")
             
             # Handle all raw updates
@@ -686,40 +729,29 @@ class NameChangeBot:
                 """Handle raw events for name changes"""
                 try:
                     logger.info(f"Received raw event: {type(event)}")
-                    logger.info(f"Event details: {event}")
                     
                     # Handle UpdateUser
                     if isinstance(event, UpdateUser):
                         logger.info(f"Processing UpdateUser event for user {event.user.id}")
-                        logger.info(f"User details: {event.user}")
-                        await self.handle_name_change(event)
+                        await self.handle_name_change(event.user)
                         return
                     
                     # Handle UpdateUserName
                     if isinstance(event, UpdateUserName):
                         logger.info(f"Processing UpdateUserName event for user {event.user_id}")
-                        try:
-                            # Get full user info to ensure we have the latest data
-                            user = await self.client.get_entity(event.user_id)
-                            if isinstance(user, User):
-                                logger.info(f"User details: {user}")
-                                await self.handle_name_change(user)
-                            else:
-                                logger.warning(f"Could not get User object for UpdateUserName event: {event.user_id}")
-                        except Exception as e:
-                            logger.error(f"Error processing UpdateUserName: {str(e)}")
+                        await self.check_user_changes(event.user_id)
+                        return
+
+                    # Handle UpdateUserStatus
+                    if isinstance(event, UpdateUserStatus):
+                        logger.info(f"Processing UpdateUserStatus event for user {event.user_id}")
+                        await self.check_user_changes(event.user_id)
                         return
 
                     # Handle UpdateChannelParticipant
                     if isinstance(event, UpdateChannelParticipant):
-                        logger.info(f"Processing UpdateChannelParticipant event: {event}")
-                        try:
-                            user = await self.client.get_entity(event.user_id)
-                            if isinstance(user, User):
-                                logger.info(f"User {user.id} updated in channel: {event.channel_id}")
-                                await self.handle_name_change(user)
-                        except Exception as e:
-                            logger.error(f"Error processing UpdateChannelParticipant: {str(e)}")
+                        logger.info(f"Processing UpdateChannelParticipant event for user {event.user_id}")
+                        await self.check_user_changes(event.user_id)
                         return
 
                 except Exception as e:
@@ -732,7 +764,7 @@ class NameChangeBot:
             self.client.add_event_handler(self.remove_scam_command, events.NewMessage(pattern='/removescam'))
             self.client.add_event_handler(self.list_scam_command, events.NewMessage(pattern='/listscam'))
             
-            # Add user join/leave handlers with more specific filters
+            # Add user join/leave handlers
             self.client.add_event_handler(
                 self.handle_user_join,
                 events.ChatAction(func=lambda e: e.user_joined)
@@ -742,22 +774,25 @@ class NameChangeBot:
                 events.ChatAction(func=lambda e: e.user_left)
             )
 
-            # Add user update handler
-            @self.client.on(events.UserUpdate)
-            async def handle_user_update(event):
-                """Handle user updates"""
-                try:
-                    logger.info(f"Received UserUpdate event: {event}")
-                    user = event.user
-                    if isinstance(user, User):
-                        logger.info(f"Processing UserUpdate for user {user.id}")
-                        await self.handle_name_change(user)
-                except Exception as e:
-                    logger.error(f"Error in user update handler: {str(e)}", exc_info=True)
+            # Add periodic user check
+            async def periodic_user_check():
+                while True:
+                    try:
+                        # Get all active users
+                        users = self.db.get_all_users()
+                        for user in users:
+                            await self.check_user_changes(user['user_id'])
+                        await asyncio.sleep(60)  # Check every minute
+                    except Exception as e:
+                        logger.error(f"Error in periodic check: {str(e)}")
+                        await asyncio.sleep(60)
+
+            # Start periodic check
+            asyncio.create_task(periodic_user_check())
 
             logger.info("All event handlers registered successfully")
             
-            # Send startup message to admin
+            # Send startup message
             await self.client.send_message(
                 Config.ADMIN_ID,
                 "🤖 Name Change Bot started!\n\n"
@@ -768,9 +803,8 @@ class NameChangeBot:
                 "/removescam <name> - Remove a scam name\n"
                 "/listscam - View all scam names"
             )
-            logger.info("Startup message sent to admin")
             
-            # Run the client until disconnected with connection monitoring
+            # Run the client
             logger.info("Bot is ready! Monitoring for name changes...")
             while True:
                 try:
@@ -784,7 +818,7 @@ class NameChangeBot:
                     await self.client.run_until_disconnected()
                 except Exception as e:
                     logger.error(f"Error in connection monitoring: {str(e)}")
-                    await asyncio.sleep(5)  # Wait before retrying
+                    await asyncio.sleep(5)
             
         except Exception as e:
             logger.error(f"Error in bot startup: {str(e)}", exc_info=True)
