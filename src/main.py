@@ -437,6 +437,12 @@ class NameChangeBot:
                 await event.reply("❌ This command can only be used in groups.")
                 return
 
+            # Delete the command message
+            try:
+                await event.delete()
+            except Exception as e:
+                logger.error(f"Error deleting command message: {str(e)}")
+
             # Get group information
             chat = await event.get_chat()
             # Normalize group ID
@@ -445,14 +451,14 @@ class NameChangeBot:
             # Get proper group name
             group_name = getattr(chat, 'title', None)
             if not group_name:
-                await event.reply("❌ Could not get group name. Please try again.")
+                await self.client.send_message(Config.ADMIN_ID, "❌ Could not get group name. Please try again.")
                 return
 
             logger.info(f"Processing /start command for group: {group_name} ({group_id})")
 
             # Register group first
             if not self.db.register_group(group_id, group_name):
-                await event.reply("❌ Error registering group. Please try again.")
+                await self.client.send_message(Config.ADMIN_ID, "❌ Error registering group. Please try again.")
                 return
 
             # Add all current members to tracking
@@ -490,21 +496,17 @@ class NameChangeBot:
             if errors > 0:
                 status_msg.append(f"⚠️ {errors} users could not be added.")
             
-            status_msg.append("I'll notify the admin when users change their names.")
-            await event.reply("\n".join(status_msg))
+            status_msg.append("I'll notify you when users change their names.")
             
-            # Notify admin
+            # Send status message only to admin
             await self.client.send_message(
                 Config.ADMIN_ID,
-                f"🎯 New group added to tracking:\n"
-                f"Group: {group_name}\n"
-                f"Users added: {count}\n"
-                f"Total users: {total_users}"
+                "\n".join(status_msg)
             )
 
         except Exception as e:
             logger.error(f"Error in start command: {str(e)}", exc_info=True)
-            await event.reply("❌ An error occurred. Please try again.")
+            await self.client.send_message(Config.ADMIN_ID, "❌ An error occurred. Please try again.")
 
     async def status_command(self, event):
         """Handle /status command"""
@@ -570,6 +572,8 @@ class NameChangeBot:
             added = []
             failed = []
             already_exist = []
+            matches_found = []
+            banned_users = []
 
             # Add each name
             for name in scam_names:
@@ -579,6 +583,72 @@ class NameChangeBot:
                 else:
                     already_exist.append(name)
                     logger.info(f"Scam name already exists: {name}")
+
+            # Check for matches in active users if new names were added
+            if added:
+                # Get all active users
+                users = self.db.get_all_users()
+                for user in users:
+                    full_name = f"{user['first_name']} {user['last_name']}".strip()
+                    for scam_name in added:
+                        if scam_name.lower() in full_name.lower():
+                            matches_found.append({
+                                'user_id': user['user_id'],
+                                'name': full_name,
+                                'scam_name': scam_name
+                            })
+                            logger.warning(f"Match found for new scam name '{scam_name}' in user {user['user_id']}: {full_name}")
+
+                            # Get user's active groups
+                            user_groups = self.db.get_user_active_groups(user['user_id'])
+                            
+                            # Ban user from all groups
+                            for group in user_groups:
+                                try:
+                                    # Get the chat entity
+                                    chat = await self.client.get_entity(group['group_id'])
+                                    
+                                    # Get bot's permissions in the chat
+                                    bot_permissions = await self.client.get_permissions(chat, await self.client.get_me())
+                                    
+                                    # Check if bot has ban rights
+                                    if not bot_permissions.is_admin and not bot_permissions.ban_users:
+                                        logger.warning(f"Bot doesn't have ban rights in group {group['group_name']}")
+                                        continue
+
+                                    try:
+                                        # Try to ban using edit_permissions first (for supergroups)
+                                        await self.client.edit_permissions(
+                                            chat,
+                                            user['user_id'],
+                                            until_date=None,  # Permanent ban
+                                            view_messages=False,
+                                            send_messages=False,
+                                            send_media=False,
+                                            send_stickers=False,
+                                            send_gifs=False,
+                                            send_games=False,
+                                            send_inline=False
+                                        )
+                                        logger.info(f"Banned user {user['user_id']} from supergroup {group['group_name']}")
+                                        banned_users.append({
+                                            'user_id': user['user_id'],
+                                            'name': full_name,
+                                            'group': group['group_name']
+                                        })
+                                    except Exception as e:
+                                        # If that fails, try kick_participant (for regular groups)
+                                        logger.info(f"edit_permissions failed, trying kick_participant: {str(e)}")
+                                        await self.client.kick_participant(chat, user['user_id'])
+                                        logger.info(f"Kicked user {user['user_id']} from group {group['group_name']}")
+                                        banned_users.append({
+                                            'user_id': user['user_id'],
+                                            'name': full_name,
+                                            'group': group['group_name']
+                                        })
+
+                                except Exception as e:
+                                    logger.error(f"Failed to ban user {user['user_id']} from group {group['group_name']}: {str(e)}")
 
             # Prepare response message
             msg = []
@@ -602,6 +672,32 @@ class NameChangeBot:
                 await event.reply("\n".join(msg))
             else:
                 await event.reply("❌ No names were added.")
+
+            # If matches found, send detailed notification
+            if matches_found:
+                match_msg = ["🚨 Matches found and banned for newly added scam names:"]
+                for match in matches_found:
+                    match_msg.append(f"\nUser: {match['name']}")
+                    match_msg.append(f"ID: {match['user_id']}")
+                    match_msg.append(f"Matched with: {match['scam_name']}")
+                    match_msg.append("━━━━━━━━━━━━━━━━━━━━━━")
+                
+                await self.client.send_message(
+                    Config.ADMIN_ID,
+                    "\n".join(match_msg)
+                )
+
+                # Send ban summary
+                if banned_users:
+                    ban_msg = ["\n📋 Ban Summary:"]
+                    for ban in banned_users:
+                        ban_msg.append(f"\n• {ban['name']} (ID: {ban['user_id']})")
+                        ban_msg.append(f"  Banned from: {ban['group']}")
+                    
+                    await self.client.send_message(
+                        Config.ADMIN_ID,
+                        "\n".join(ban_msg)
+                    )
 
         except Exception as e:
             logger.error(f"Error in add_scam command: {str(e)}", exc_info=True)
@@ -767,7 +863,7 @@ class NameChangeBot:
             self.client.add_event_handler(self.add_scam_command, events.NewMessage(pattern='/addscam'))
             self.client.add_event_handler(self.remove_scam_command, events.NewMessage(pattern='/removescam'))
             self.client.add_event_handler(self.list_scam_command, events.NewMessage(pattern='/listscam'))
-            
+
             # Add user join/leave handlers
             self.client.add_event_handler(
                 self.handle_user_join,
@@ -823,7 +919,7 @@ class NameChangeBot:
                 except Exception as e:
                     logger.error(f"Error in connection monitoring: {str(e)}")
                     await asyncio.sleep(5)
-            
+
         except Exception as e:
             logger.error(f"Error in bot startup: {str(e)}", exc_info=True)
             raise
