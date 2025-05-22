@@ -57,44 +57,25 @@ class NameChangeBot:
             logger.error(f"Error in web server: {str(e)}")
             raise
 
-    async def handle_name_change(self, event):
+    async def handle_name_change(self, event_or_user):
         """Handle user name changes"""
         try:
-            logger.info(f"Received update event: {type(event)}")
+            logger.info(f"Received update event: {type(event_or_user)}")
             
-            # Handle different update types
-            if isinstance(event, UpdateUser):
-                user = event.user
-                if not isinstance(user, User):
-                    logger.warning(f"UpdateUser event contains non-User object: {type(user)}")
-                    return
-                logger.info(f"Processing UpdateUser event for user {user.id}")
-            elif isinstance(event, UpdateUserName):
-                # For UpdateUserName, we need to fetch the user
-                try:
-                    user = await self.client.get_entity(event.user_id)
-                    if not isinstance(user, User):
-                        logger.warning(f"Could not get User object for UpdateUserName event: {event.user_id}")
-                        return
-                    logger.info(f"Processing UpdateUserName event for user {user.id}")
-                except Exception as e:
-                    logger.error(f"Error fetching user for UpdateUserName event: {str(e)}")
-                    return
-            elif isinstance(event, UpdateChannelParticipant):
-                logger.info(f"Processing UpdateChannelParticipant event: {event}")
-                try:
-                    user = await self.client.get_entity(event.user_id)
-                    if isinstance(user, User):
-                        logger.info(f"User {user.id} updated in channel: {event.channel_id}")
-                        # Create a synthetic UpdateUser event
-                        update_event = UpdateUser(user=user)
-                        await self.handle_name_change(update_event)
-                except Exception as e:
-                    logger.error(f"Error processing UpdateChannelParticipant: {str(e)}")
-                return
+            # Handle different input types
+            if isinstance(event_or_user, UpdateUser):
+                user = event_or_user.user
+            elif isinstance(event_or_user, User):
+                user = event_or_user
             else:
-                logger.debug(f"Ignoring unsupported update type: {type(event)}")
+                logger.debug(f"Ignoring unsupported update type: {type(event_or_user)}")
                 return
+
+            if not isinstance(user, User):
+                logger.warning(f"Invalid user object: {type(user)}")
+                return
+
+            logger.info(f"Processing name change for user {user.id}")
 
             # Get existing user data
             existing_user = self.db.get_user(user.id)
@@ -704,9 +685,8 @@ class NameChangeBot:
                             user = await self.client.get_entity(event.user_id)
                             if isinstance(user, User):
                                 logger.info(f"User details: {user}")
-                                # Create UpdateUser event correctly
-                                update_event = UpdateUser(user=user)
-                                await self.handle_name_change(update_event)
+                                # Instead of creating UpdateUser, pass the user directly
+                                await self.handle_name_change(user)
                         except Exception as e:
                             logger.error(f"Error processing UpdateUserName: {str(e)}")
                         return
