@@ -9,9 +9,11 @@ services:
         value: 3.9.0
       - key: RENDER_HEALTH_CHECK
         value: "true"
+      - key: DB_DIR
+        value: "/data"
     
     autoDeploy: true
-    plan: free
+    plan: professional
     # Prevent service from sleeping
     numInstances: 1
     # Configure health check
@@ -20,4 +22,10 @@ services:
     # Keep the service alive
     envVars:
       - key: KEEP_ALIVE
-        value: "true" 
+        value: "true"
+    
+    # Add persistent disk for database
+    disk:
+      name: name-change-db
+      mountPath: /data
+      sizeGB: 5 
