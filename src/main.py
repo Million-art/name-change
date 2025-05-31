@@ -743,11 +743,11 @@ class NameChangeBot:
             # Get all scam names
             scam_names = self.db.get_scam_names()
             
+            # Format the message
             if not scam_names:
                 await event.reply("📝 No scam names in the list.")
                 return
 
-            # Format the message
             msg = ["📝 Scam Names List:"]
             for i, name in enumerate(scam_names, 1):
                 msg.append(f"{i}. {name}")
